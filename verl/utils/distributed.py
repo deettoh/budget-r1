@@ -12,13 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Utilities for distributed training."""
+
 import os
 
 
 def initialize_global_process_group(timeout_second=36000):
+    """Init NCCL and bridge Slurm env vars so srun works sans torchrun.
+
+    Mirrors SLURM_PROCID/LOCALID/NTASKS into RANK/LOCAL_RANK/WORLD_SIZE.
+
+    Returns:
+        ``(local_rank, rank, world_size)``.
+    """
     import torch.distributed
     from datetime import timedelta
-    torch.distributed.init_process_group('nccl', timeout=timedelta(seconds=timeout_second))
+
+    if "SLURM_PROCID" in os.environ:
+        os.environ.setdefault("RANK", os.environ["SLURM_PROCID"])
+        os.environ.setdefault("LOCAL_RANK", os.environ.get("SLURM_LOCALID", "0"))
+        os.environ.setdefault("WORLD_SIZE", os.environ.get("SLURM_NTASKS", "1"))
+    torch.distributed.init_process_group(
+        "nccl", timeout=timedelta(seconds=timeout_second)
+    )
     local_rank = int(os.environ["LOCAL_RANK"])
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
