@@ -9,6 +9,7 @@ from verl import DataProto
 from verl.utils.tracking import Tracking
 import shutil
 import requests
+from search_r1.budgeting import parse_budget_declaration
 
 @dataclass
 class GenerationConfig:
@@ -21,6 +22,14 @@ class GenerationConfig:
     no_think_rl: bool=False
     search_url: str = None
     topk: int = 3
+    retriever_name: str = "e5"
+    index_path: str = None
+    corpus_path: str = None
+    retriever_model: str = "intfloat/e5-base-v2"
+    faiss_gpu: bool = True
+    retrieval_batch_size: int = 512
+    enable_budget_planner: bool = False
+    max_budget: int = 5
 
 class LLMGenerationManager:
     def __init__(
@@ -34,6 +43,7 @@ class LLMGenerationManager:
         self.actor_rollout_wg = actor_rollout_wg
         self.config = config
         self.is_validation = is_validation
+        self.local_retriever = None
 
         self.tensor_fn = TensorHelper(TensorConfig(
             pad_token_id=tokenizer.pad_token_id,
@@ -58,12 +68,19 @@ class LLMGenerationManager:
             skip_special_tokens=True
         )
 
-        responses_str = [resp.split('</search>')[0] + '</search>'
-                 if '</search>' in resp 
-                 else resp.split('</answer>')[0] + '</answer>'
-                 if '</answer>' in resp 
-                 else resp
-                 for resp in responses_str]
+        stop_tags = ['</search>', '</answer>']
+        if self.config.enable_budget_planner:
+            stop_tags.append('</budget>')
+
+        truncated_responses = []
+        for resp in responses_str:
+            stop_positions = [(resp.find(tag) + len(tag), tag) for tag in stop_tags if tag in resp]
+            if stop_positions:
+                stop_pos, _ = min(stop_positions, key=lambda item: item[0])
+                truncated_responses.append(resp[:stop_pos])
+            else:
+                truncated_responses.append(resp)
+        responses_str = truncated_responses
 
         if self.config.no_think_rl:
             raise ValueError('stop')
@@ -227,6 +244,9 @@ class LLMGenerationManager:
         turns_stats = torch.ones(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         valid_action_stats = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         valid_search_stats = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
+        declared_budgets = [-1 for _ in range(gen_batch.batch['input_ids'].shape[0])]
+        search_counts = [0 for _ in range(gen_batch.batch['input_ids'].shape[0])]
+        blocked_search_counts = [0 for _ in range(gen_batch.batch['input_ids'].shape[0])]
         active_num_list = [active_mask.sum().item()]
         rollings = gen_batch
 
@@ -251,7 +271,12 @@ class LLMGenerationManager:
 
             # Execute in environment and process observations
             next_obs, dones, valid_action, is_search = self.execute_predictions(
-                responses_str, self.tokenizer.pad_token, active_mask
+                responses_str,
+                self.tokenizer.pad_token,
+                active_mask,
+                declared_budgets=declared_budgets,
+                search_counts=search_counts,
+                blocked_search_counts=blocked_search_counts,
             )
             
             curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
@@ -294,7 +319,13 @@ class LLMGenerationManager:
 
             # # Execute in environment and process observations
             _, dones, valid_action, is_search = self.execute_predictions(
-                responses_str, self.tokenizer.pad_token, active_mask, do_search=False
+                responses_str,
+                self.tokenizer.pad_token,
+                active_mask,
+                do_search=False,
+                declared_budgets=declared_budgets,
+                search_counts=search_counts,
+                blocked_search_counts=blocked_search_counts,
             )
 
             curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
@@ -313,14 +344,23 @@ class LLMGenerationManager:
         meta_info['active_mask'] = active_mask.tolist()
         meta_info['valid_action_stats'] = valid_action_stats.tolist()
         meta_info['valid_search_stats'] = valid_search_stats.tolist()
+        meta_info['declared_budget_stats'] = declared_budgets
+        meta_info['blocked_search_stats'] = blocked_search_counts
         
         print("ACTIVE_TRAJ_NUM:", active_num_list)
         
-        return self._compose_final_output(original_left_side, original_right_side, meta_info)
+        rollout_stats = {
+            'declared_budget': torch.tensor(declared_budgets, dtype=torch.long),
+            'valid_search_count': torch.tensor(search_counts, dtype=torch.long),
+            'blocked_search_count': torch.tensor(blocked_search_counts, dtype=torch.long),
+        }
+
+        return self._compose_final_output(original_left_side, original_right_side, meta_info, rollout_stats)
 
     def _compose_final_output(self, left_side: Dict,
                             right_side: Dict,
-                            meta_info: Dict) -> Tuple[Dict, Dict]:
+                            meta_info: Dict,
+                            rollout_stats: Dict = None) -> Tuple[Dict, Dict]:
         """Compose final generation output."""
         final_output = right_side.copy()
         final_output['prompts'] = left_side['input_ids']
@@ -344,13 +384,25 @@ class LLMGenerationManager:
         final_output['position_ids'] = self.tensor_fn.create_position_ids(
             final_output['attention_mask']
         )
+
+        if rollout_stats is not None:
+            final_output.update(rollout_stats)
         
         final_output = DataProto.from_dict(final_output)
         final_output.meta_info.update(meta_info)
         
         return final_output
 
-    def execute_predictions(self, predictions: List[str], pad_token: str, active_mask=None, do_search=True) -> List[str]:
+    def execute_predictions(
+        self,
+        predictions: List[str],
+        pad_token: str,
+        active_mask=None,
+        do_search=True,
+        declared_budgets=None,
+        search_counts=None,
+        blocked_search_counts=None,
+    ) -> List[str]:
         """
         Execute predictions across multiple environments.
         NOTE: the function is the actual `step` function in the environment
@@ -367,12 +419,28 @@ class LLMGenerationManager:
         cur_actions, contents = self.postprocess_predictions(predictions)
         next_obs, dones, valid_action, is_search = [], [], [], []
         
-        search_queries = [content for action, content in zip(cur_actions, contents) if action == 'search']
+        if declared_budgets is None:
+            declared_budgets = [-1 for _ in predictions]
+        if search_counts is None:
+            search_counts = [0 for _ in predictions]
+        if blocked_search_counts is None:
+            blocked_search_counts = [0 for _ in predictions]
+
+        search_queries = []
+        if do_search:
+            for i, (action, content) in enumerate(zip(cur_actions, contents)):
+                if action != 'search':
+                    continue
+                if self.config.enable_budget_planner and declared_budgets[i] >= 0 and search_counts[i] >= declared_budgets[i]:
+                    continue
+                if self.config.enable_budget_planner and declared_budgets[i] < 0:
+                    continue
+                search_queries.append(content)
         if do_search:
             search_results = self.batch_search(search_queries)
-            assert len(search_results) == sum([1 for action in cur_actions if action == 'search'])
+            assert len(search_results) == len(search_queries)
         else:
-            search_results = [''] * sum([1 for action in cur_actions if action == 'search'])
+            search_results = []
 
         for i, (action, active) in enumerate(zip(cur_actions, active_mask)):
             
@@ -382,16 +450,58 @@ class LLMGenerationManager:
                 valid_action.append(0)
                 is_search.append(0)
             else:
-                if action == 'answer':
+                if action == 'budget':
+                    if not self.config.enable_budget_planner:
+                        next_obs.append('\nBudget declarations are not enabled for this run. Continue with <think>, <search>, or <answer>.\n')
+                        dones.append(0)
+                        valid_action.append(0)
+                        is_search.append(0)
+                    elif declared_budgets[i] >= 0:
+                        next_obs.append('\nA retrieval budget was already declared. Continue reasoning, searching, or answer now.\n')
+                        dones.append(0)
+                        valid_action.append(0)
+                        is_search.append(0)
+                    else:
+                        budget = parse_budget_declaration(f'<budget>{contents[i]}</budget>', max_budget=self.config.max_budget)
+                        if budget is None:
+                            next_obs.append(f'\nThe budget must be an integer from 0 to {self.config.max_budget} inside <budget> and </budget>. Let me try again.\n')
+                            dones.append(0)
+                            valid_action.append(0)
+                            is_search.append(0)
+                        else:
+                            declared_budgets[i] = budget
+                            next_obs.append('\n')
+                            dones.append(0)
+                            valid_action.append(1)
+                            is_search.append(0)
+                elif self.config.enable_budget_planner and declared_budgets[i] < 0:
+                    next_obs.append(f'\nBefore reasoning, searching, or answering, I must declare a retrieval budget from 0 to {self.config.max_budget} using <budget>k</budget>.\n')
+                    dones.append(0)
+                    valid_action.append(0)
+                    is_search.append(0)
+                elif action == 'answer':
                     next_obs.append('')
                     dones.append(1)
                     valid_action.append(1)
                     is_search.append(0)
                 elif action == 'search':
-                    next_obs.append(f'\n\n<information>{search_results.pop(0).strip()}</information>\n\n')
-                    dones.append(0)
-                    valid_action.append(1)
-                    is_search.append(1)
+                    if not do_search:
+                        next_obs.append('')
+                        dones.append(0)
+                        valid_action.append(0)
+                        is_search.append(0)
+                    elif self.config.enable_budget_planner and search_counts[i] >= declared_budgets[i]:
+                        blocked_search_counts[i] += 1
+                        next_obs.append('\nThe declared retrieval budget is exhausted. I must answer using the evidence already available.\n')
+                        dones.append(0)
+                        valid_action.append(0)
+                        is_search.append(0)
+                    else:
+                        search_counts[i] += 1
+                        next_obs.append(f'\n\n<information>{search_results.pop(0).strip()}</information>\n\n')
+                        dones.append(0)
+                        valid_action.append(1)
+                        is_search.append(1)
                 else:
                     next_obs.append(f'\nMy previous action is invalid. \
 If I want to search, I should put the query between <search> and </search>. \
@@ -419,7 +529,7 @@ If I want to give the final answer, I should put the answer between <answer> and
                 
         for prediction in predictions:
             if isinstance(prediction, str): # for llm output
-                pattern = r'<(search|answer)>(.*?)</\1>'
+                pattern = r'<(budget|search|answer)>(.*?)</\1>'
                 match = re.search(pattern, prediction, re.DOTALL)
                 if match:
                     content = match.group(2).strip()  # Return only the content inside the tags
@@ -448,6 +558,20 @@ If I want to give the final answer, I should put the answer between <answer> and
         return [self._passages2string(result) for result in results]
 
     def _batch_search(self, queries):
+        if self.config.search_url == "local":
+            if self.local_retriever is None:
+                self.local_retriever = self._build_local_retriever()
+            results, scores = self.local_retriever.batch_search(
+                query_list=queries,
+                num=self.config.topk,
+                return_score=True,
+            )
+            return {
+                "result": [
+                    [{"document": doc, "score": score} for doc, score in zip(single_result, single_scores)]
+                    for single_result, single_scores in zip(results, scores)
+                ]
+            }
         
         payload = {
             "queries": queries,
@@ -456,6 +580,23 @@ If I want to give the final answer, I should put the answer between <answer> and
         }
         
         return requests.post(self.config.search_url, json=payload).json()
+
+    def _build_local_retriever(self):
+        from search_r1.search.retrieval_server import Config, get_retriever
+
+        retriever_config = Config(
+            retrieval_method=self.config.retriever_name,
+            retrieval_topk=self.config.topk,
+            index_path=self.config.index_path,
+            corpus_path=self.config.corpus_path,
+            faiss_gpu=self.config.faiss_gpu,
+            retrieval_model_path=self.config.retriever_model,
+            retrieval_pooling_method="mean",
+            retrieval_query_max_length=256,
+            retrieval_use_fp16=True,
+            retrieval_batch_size=self.config.retrieval_batch_size,
+        )
+        return get_retriever(retriever_config)
 
     def _passages2string(self, retrieval_result):
         format_reference = ''
