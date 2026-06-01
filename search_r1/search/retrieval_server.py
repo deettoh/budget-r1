@@ -21,8 +21,9 @@ def load_corpus(corpus_path: str):
     Avoids datasets.load_dataset which cached a malformed corpus and
     wrote a multi-gb arrow cache that blew the disk quota.
     """
+    # errors="replace", line order preserved so corpus[doc_id] holds
     corpus = []
-    with open(corpus_path, "r") as f:
+    with open(corpus_path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
             if line:
