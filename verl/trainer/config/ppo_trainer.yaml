@@ -23,6 +23,19 @@ actor_rollout_ref:
     override_config: { }
     enable_gradient_checkpointing: False
     use_remove_padding: False
+    lora:
+      enabled: false  # when true, freeze base and train LoRA adapters only
+      r: 64
+      alpha: 128
+      dropout: 0.05
+      target_modules:
+        - q_proj
+        - k_proj
+        - v_proj
+        - o_proj
+        - gate_proj
+        - up_proj
+        - down_proj
   actor:
     strategy: fsdp  # This is for backward-compatibility
     ppo_mini_batch_size: 256
