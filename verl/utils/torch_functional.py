@@ -15,7 +15,7 @@
 Contain small torch utilities
 """
 
-from typing import Dict, Union, List, Optional
+from typing import Dict, List, Optional, Tuple, Union
 
 import os
 import torch
@@ -23,6 +23,7 @@ import torch.distributed
 import torch.nn.functional as F
 from tensordict import TensorDict
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 try:
     from flash_attn.ops.triton.cross_entropy import cross_entropy_loss
@@ -100,6 +101,71 @@ def entropy_from_logits(logits: torch.Tensor):
     pd = torch.nn.functional.softmax(logits, dim=-1)
     entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
     return entropy
+
+
+def _logprob_entropy_chunk(
+    logits_chunk: torch.Tensor, labels_chunk: torch.Tensor
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Return (log_prob, entropy) for one token chunk.
+
+    log_prob is per label token, entropy is per-token categorical.
+    """
+    log_probs = F.log_softmax(logits_chunk, dim=-1)
+    selected = torch.gather(
+        log_probs, dim=-1, index=labels_chunk.unsqueeze(-1)
+    ).squeeze(-1)
+    entropy = -(log_probs.exp() * log_probs).sum(dim=-1)
+    return selected, entropy
+
+
+def logprobs_and_entropy_from_logits_chunked(
+    logits: torch.Tensor, labels: torch.Tensor, chunk_size: int
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Return per-token log-prob and entropy, chunked over tokens.
+
+    Gradient-checkpoints each chunk's softmax so the full
+    tokens-by-vocab intermediates never coexist and overflow the gpu.
+
+    Args:
+        logits: Tensor whose last dim is the vocabulary.
+        labels: Integer label per token.
+        chunk_size: Tokens per chunk, must be positive.
+
+    Returns:
+        Tuple ``(log_prob, entropy)``, each shaped like ``labels``.
+    """
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+    label_shape = labels.shape
+    vocab_size = logits.shape[-1]
+    logits_flat = logits.reshape(-1, vocab_size)
+    labels_flat = labels.reshape(-1)
+    num_tokens = labels_flat.shape[0]
+
+    log_prob_parts = []
+    entropy_parts = []
+    for start in range(0, num_tokens, chunk_size):
+        end = min(start + chunk_size, num_tokens)
+        logits_chunk = logits_flat[start:end]
+        labels_chunk = labels_flat[start:end]
+        if logits_chunk.requires_grad:
+            log_prob_chunk, entropy_chunk = checkpoint(
+                _logprob_entropy_chunk,
+                logits_chunk,
+                labels_chunk,
+                use_reentrant=False,
+            )
+        else:
+            log_prob_chunk, entropy_chunk = _logprob_entropy_chunk(
+                logits_chunk, labels_chunk
+            )
+        log_prob_parts.append(log_prob_chunk)
+        entropy_parts.append(entropy_chunk)
+
+    log_prob = torch.cat(log_prob_parts, dim=0).reshape(label_shape)
+    entropy = torch.cat(entropy_parts, dim=0).reshape(label_shape)
+    return log_prob, entropy
 
 
 def masked_sum(values, mask, axis=None):

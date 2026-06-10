@@ -26,7 +26,11 @@ from verl import DataProto
 from verl.trainer.ppo import core_algos
 from verl.workers.actor import BasePPOActor
 from verl.utils.py_functional import append_to_dict
-from verl.utils.torch_functional import logprobs_from_logits, masked_mean
+from verl.utils.torch_functional import (
+    logprobs_and_entropy_from_logits_chunked,
+    logprobs_from_logits,
+    masked_mean,
+)
 from verl.utils.ulysses import ulysses_pad_and_slice_inputs, gather_outpus_and_unpad
 from verl.utils.seqlen_balancing import rearrange_micro_batches, get_reverse_idx
 import verl.utils.torch_functional as verl_F
@@ -52,6 +56,9 @@ class DataParallelPPOActor(BasePPOActor):
         print(f'Actor use_remove_padding={self.use_remove_padding}')
         self.ulysses_sequence_parallel_size = self.config.ulysses_sequence_parallel_size
         self.use_ulysses_sp = self.ulysses_sequence_parallel_size > 1
+
+        # chunk vocab softmax so the full backward fits, None=stock
+        self.log_prob_chunk_size = self.config.get('log_prob_chunk_size', None)
 
         self.compute_entropy_from_logits = torch.compile(verl_F.entropy_from_logits, dynamic=True)
 
@@ -99,11 +106,21 @@ class DataParallelPPOActor(BasePPOActor):
 
                 logits_rmpad.div_(temperature)
 
-                # compute entropy
-                entropy_rmpad = self.compute_entropy_from_logits(logits_rmpad)  # ((total_nnz / sp) + pad)
-
-                # if use_sp: ((total_nnz / sp) + pad) ; if not use_sp: (batch, seqlen)
-                log_probs = logprobs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled)
+                if self.log_prob_chunk_size:
+                    log_probs, entropy_rmpad = (
+                        logprobs_and_entropy_from_logits_chunked(
+                            logits_rmpad,
+                            input_ids_rmpad_rolled,
+                            self.log_prob_chunk_size,
+                        )
+                    )
+                else:
+                    entropy_rmpad = self.compute_entropy_from_logits(
+                        logits_rmpad)
+                    log_probs = logprobs_from_logits(
+                        logits=logits_rmpad,
+                        labels=input_ids_rmpad_rolled,
+                    )
 
                 # gather log_prob if sp > 1
                 if self.use_ulysses_sp:
