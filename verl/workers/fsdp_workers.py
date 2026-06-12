@@ -135,6 +135,16 @@ class ActorRolloutRefWorker(Worker):
         else:
             torch_dtype = PrecisionType.to_dtype(torch_dtype)
 
+        lora_config = self.config.model.get('lora', None)
+        should_wrap_lora = (
+            bool(lora_config)
+            and lora_config.get('enabled', False)
+            and self._is_actor
+        )
+        # frozen base in bf16 fits beside vllm, only adapters train
+        if should_wrap_lora:
+            torch_dtype = torch.bfloat16
+
         # override model kwargs
         actor_model_config = AutoConfig.from_pretrained(local_path, trust_remote_code=trust_remote_code)
 
@@ -173,6 +183,23 @@ class ActorRolloutRefWorker(Worker):
                 actor_module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
         torch.distributed.barrier()
 
+        if should_wrap_lora:
+            from peft import LoraConfig, get_peft_model
+            peft_config = LoraConfig(
+                r=lora_config.get('r', 64),
+                lora_alpha=lora_config.get('alpha', 128),
+                lora_dropout=lora_config.get('dropout', 0.05),
+                target_modules=list(lora_config.get('target_modules', [])),
+                bias='none',
+                task_type='CAUSAL_LM',
+            )
+            actor_module = get_peft_model(actor_module, peft_config)
+            # cast adapters to bf16, fsdp flatten needs one dtype
+            actor_module = actor_module.to(torch_dtype)
+            if enable_gradient_checkpointing:
+                # route grad to adapters through the frozen base
+                actor_module.enable_input_require_grads()
+
         if self.rank == 0:
             print_model_size(actor_module)
 
@@ -208,28 +235,54 @@ class ActorRolloutRefWorker(Worker):
         else:
             sharding_strategy = ShardingStrategy.FULL_SHARD
 
+        # fsdp1 use_orig_params can't writeback tied frozen embeds
+        ignored_modules = None
+        if should_wrap_lora:
+            ignored_modules = []
+            emb = actor_module.get_input_embeddings()
+            if emb is not None:
+                ignored_modules.append(emb)
+            out_emb = actor_module.get_output_embeddings()
+            if out_emb is not None and out_emb is not emb:
+                ignored_modules.append(out_emb)
+
         # TODO: add transformer policy
         actor_module_fsdp = FSDP(
             actor_module,
             param_init_fn=init_fn,
-            use_orig_params=False,
+            # frozen base + adapters can't share one flat param
+            use_orig_params=should_wrap_lora,
             auto_wrap_policy=auto_wrap_policy,
             device_id=torch.cuda.current_device(),
             sharding_strategy=sharding_strategy,  # zero3
             mixed_precision=mixed_precision,
             sync_module_states=True,
             device_mesh=self.device_mesh,
+            ignored_modules=ignored_modules,
             forward_prefetch=False)
+
+        # fsdp leaves ignored modules on cpu, move them or forward fails
+        for _mod in (ignored_modules or []):
+            _mod.to(torch.cuda.current_device())
 
         log_gpu_memory_usage('After Actor FSDP init', logger=logger)
 
         # TODO: add more optimizer args into config
         if self._is_actor:
             from verl.utils.torch_functional import get_constant_schedule_with_warmup
-            actor_optimizer = optim.AdamW(actor_module_fsdp.parameters(),
-                                          lr=optim_config.lr,
-                                          betas=optim_config.get('betas', (0.9, 0.999)),
-                                          weight_decay=optim_config.get('weight_decay', 1e-2))
+            # optimize only adapters, frozen base gets no optim state
+            if should_wrap_lora:
+                optim_params = [
+                    p for p in actor_module_fsdp.parameters()
+                    if p.requires_grad
+                ]
+            else:
+                optim_params = actor_module_fsdp.parameters()
+            actor_optimizer = optim.AdamW(
+                optim_params,
+                lr=optim_config.lr,
+                betas=optim_config.get('betas', (0.9, 0.999)),
+                weight_decay=optim_config.get('weight_decay', 1e-2))
 
             total_steps = optim_config.get('total_training_steps', 0)
             num_warmup_steps_ratio = optim_config.get('lr_warmup_steps_ratio', 0.)
@@ -394,6 +447,16 @@ class ActorRolloutRefWorker(Worker):
             offload_fsdp_param_and_grad(module=self.actor_module_fsdp, offload_grad=self._is_offload_grad)
         if self._is_offload_optimizer:
             offload_fsdp_optimizer(optimizer=self.actor_optimizer)
+        # null the ~5gb flat_param.grad zero_grad can't reach or it OOMs
+        if hasattr(self.actor_module, 'peft_config'):
+            for _m in self.actor_module_fsdp.modules():
+                _h = getattr(_m, '_handle', None)
+                _hs = [_h] if _h is not None else getattr(_m, '_handles', [])
+                for _handle in _hs:
+                    _fp = getattr(_handle, 'flat_param', None)
+                    if _fp is not None and _fp.grad is not None:
+                        _fp.grad = None
+            self.actor_module_fsdp.zero_grad(set_to_none=True)
         torch.cuda.empty_cache()
         return output
 
@@ -514,21 +577,49 @@ class ActorRolloutRefWorker(Worker):
                                      device_id=torch.cuda.current_device(),
                                      load_grad=self._is_offload_grad)
 
-        # TODO: support DCP and save sharded checkpoints
         import torch.distributed
-        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType, FullStateDictConfig
-        cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-        with FSDP.state_dict_type(self.actor.actor_module, StateDictType.FULL_STATE_DICT, cfg):
-            state_dict = self.actor.actor_module.state_dict()
-        if self.rank == 0:
-            print(f'Saving actor checkpoint to {local_path}')
-            os.makedirs(local_path, exist_ok=True)
-            self.actor_module.save_pretrained(local_path, state_dict=state_dict)
-            self.tokenizer.save_pretrained(local_path)
-            if hdfs_path is not None:
-                print(f'Uploading actor checkpoint to {hdfs_path}')
-                hdfs_io.makedirs(hdfs_path, exist_ok=True)
-                hdfs_io.copy(src=local_path, dst=hdfs_path)
+        is_lora = hasattr(self.actor_module, 'peft_config')
+        if is_lora:
+            # ws1 NO_SHARD params are full, FULL_STATE_DICT hook breaks
+            from peft.utils import get_peft_model_state_dict
+            from safetensors.torch import save_file
+            full_sd = {
+                name.replace('_fsdp_wrapped_module.', ''): param.detach().cpu()
+                for name, param in self.actor_module_fsdp.named_parameters()
+            }
+            adapter_sd = get_peft_model_state_dict(
+                self.actor_module, state_dict=full_sd,
+                save_embedding_layers=False)
+            if self.rank == 0:
+                print(f'Saving actor adapter ({len(adapter_sd)} tensors) '
+                      f'to {local_path}')
+                os.makedirs(local_path, exist_ok=True)
+                # save_pretrained recomputes a broken state_dict
+                save_file(
+                    {k: v.contiguous() for k, v in adapter_sd.items()},
+                    os.path.join(local_path, 'adapter_model.safetensors'))
+                self.actor_module.peft_config['default'].save_pretrained(
+                    local_path)
+                self.tokenizer.save_pretrained(local_path)
+                if hdfs_path is not None:
+                    print(f'Uploading actor checkpoint to {hdfs_path}')
+                    hdfs_io.makedirs(hdfs_path, exist_ok=True)
+                    hdfs_io.copy(src=local_path, dst=hdfs_path)
+        else:
+            # TODO: support DCP and save sharded checkpoints
+            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType, FullStateDictConfig
+            cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+            with FSDP.state_dict_type(self.actor.actor_module, StateDictType.FULL_STATE_DICT, cfg):
+                state_dict = self.actor.actor_module.state_dict()
+            if self.rank == 0:
+                print(f'Saving actor checkpoint to {local_path}')
+                os.makedirs(local_path, exist_ok=True)
+                self.actor_module.save_pretrained(local_path, state_dict=state_dict)
+                self.tokenizer.save_pretrained(local_path)
+                if hdfs_path is not None:
+                    print(f'Uploading actor checkpoint to {hdfs_path}')
+                    hdfs_io.makedirs(hdfs_path, exist_ok=True)
+                    hdfs_io.copy(src=local_path, dst=hdfs_path)
 
         torch.distributed.barrier()
         if self._is_offload_param:
