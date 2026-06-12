@@ -242,6 +242,9 @@ def main(config):
         # surface the sharding-manager mem trace for rollout-sync OOMs
         os.environ.setdefault("VERL_PPO_LOGGING_LEVEL", "INFO")
 
+        # disable TorchInductor gcc JIT-link fails here, eager is equiv
+        os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+
         # expandable_segments reuses fragments so vLLM + actor fit 24gb
         os.environ.setdefault(
             "PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True"
