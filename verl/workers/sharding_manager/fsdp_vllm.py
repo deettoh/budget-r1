@@ -31,6 +31,14 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv('VERL_PPO_LOGGING_LEVEL', 'WARN'))
 
 
+def _to_hf_name(peft_name):
+    """Rewrite a PEFT/FSDP param name to the HF name vLLM expects."""
+    name = peft_name.replace('_fsdp_wrapped_module.', '')
+    name = name.replace('base_model.model.', '')
+    name = name.replace('.base_layer.', '.')
+    return name
+
+
 class FSDPVLLMShardingManager(BaseShardingManager):
 
     def __init__(self,
@@ -66,10 +74,48 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         else:
             self.gen_random_states = None
 
+    def _lora_merged_cpu_state_dict(self):
+        """Return merged base weights on CPU without mutating the actor.
+
+        Adds each LoRA delta to its base weight in a fresh tensor
+        instead of merge_adapter(), which reassigns the base layer
+        weight and desyncs the FSDP use_orig_params flat param -- the
+        next grad forward's writeback then crashes. At world size 1
+        the actor is NO_SHARD so named_parameters() exposes full local
+        tensors copied straight to CPU, with no FSDP gather clone to
+        OOM beside the co-resident vLLM.
+        """
+        # map base-weight id to its lora layer
+        layers = {}
+        for module in self.module.modules():
+            if (hasattr(module, 'get_delta_weight')
+                    and hasattr(module, 'get_base_layer')
+                    and hasattr(module, 'active_adapters')):
+                layers[id(module.get_base_layer().weight)] = module
+        cleaned = {}
+        for name, param in self.module.named_parameters():
+            if 'lora_' in name:
+                continue
+            weight = param.detach()
+            layer = layers.get(id(param))
+            if layer is not None:
+                for adapter in layer.active_adapters:
+                    weight = weight + layer.get_delta_weight(adapter)
+            cleaned[_to_hf_name(name)] = weight.to('cpu')
+            # free each merged tensor so deltas don't pile on 24gb
+            del weight
+        return cleaned
+
     def __enter__(self):
-        log_gpu_memory_usage('Before state_dict() in sharding manager memory', logger=logger)
-        params = self.module.state_dict()
-        log_gpu_memory_usage('After state_dict() in sharding manager memory', logger=logger)
+        # merge base+delta without merge_adapter it desyncs flat param
+        is_lora = hasattr(self.module, 'merge_adapter')
+        if is_lora:
+            log_gpu_memory_usage('Before LoRA weight sync', logger=logger)
+            params = self._lora_merged_cpu_state_dict()
+        else:
+            log_gpu_memory_usage('Before state_dict() in sharding manager memory', logger=logger)
+            params = self.module.state_dict()
+            log_gpu_memory_usage('After state_dict() in sharding manager memory', logger=logger)
         # Copy, not share memory
         load_format = 'hf' if self.full_params else 'dtensor'
         self.inference_engine.sync_model_weights(params, load_format=load_format)
