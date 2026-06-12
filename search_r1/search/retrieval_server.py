@@ -220,6 +220,12 @@ class DenseRetriever(BaseRetriever):
             co.shard = True
             self.index = faiss.index_cpu_to_all_gpus(self.index, co=co)
 
+        # freeze nprobe so IVF recall is identical across conditions
+        nprobe = getattr(config, 'faiss_nprobe', None)
+        if nprobe is not None:
+            faiss.ParameterSpace().set_index_parameter(
+                self.index, 'nprobe', nprobe)
+
         self.corpus = load_corpus(self.corpus_path)
         self.encoder = Encoder(
             model_name = self.retrieval_method,
@@ -305,7 +311,8 @@ class Config:
         retrieval_pooling_method: str = "mean",
         retrieval_query_max_length: int = 256,
         retrieval_use_fp16: bool = False,
-        retrieval_batch_size: int = 128
+        retrieval_batch_size: int = 128,
+        faiss_nprobe: Optional[int] = None
     ):
         self.retrieval_method = retrieval_method
         self.retrieval_topk = retrieval_topk
@@ -319,6 +326,7 @@ class Config:
         self.retrieval_query_max_length = retrieval_query_max_length
         self.retrieval_use_fp16 = retrieval_use_fp16
         self.retrieval_batch_size = retrieval_batch_size
+        self.faiss_nprobe = faiss_nprobe
 
 
 class QueryRequest(BaseModel):
@@ -373,6 +381,9 @@ if __name__ == "__main__":
     parser.add_argument("--retriever_name", type=str, default="e5", help="Name of the retriever model.")
     parser.add_argument("--retriever_model", type=str, default="intfloat/e5-base-v2", help="Path of the retriever model.")
     parser.add_argument('--faiss_gpu', action='store_true', help='Use GPU for computation')
+    parser.add_argument(
+        "--nprobe", type=int, default=None,
+        help="IVF cells to probe; frozen across conditions.")
 
     args = parser.parse_args()
     
@@ -389,6 +400,7 @@ if __name__ == "__main__":
         retrieval_query_max_length=256,
         retrieval_use_fp16=True,
         retrieval_batch_size=512,
+        faiss_nprobe=args.nprobe,
     )
 
     # 2) Instantiate a global retriever so it is loaded once and reused.
