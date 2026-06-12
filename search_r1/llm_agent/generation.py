@@ -28,6 +28,7 @@ class GenerationConfig:
     retriever_model: str = "intfloat/e5-base-v2"
     faiss_gpu: bool = True
     retrieval_batch_size: int = 512
+    faiss_nprobe: int = None
     enable_budget_planner: bool = False
     max_budget: int = 5
 
@@ -595,6 +596,7 @@ If I want to give the final answer, I should put the answer between <answer> and
             retrieval_query_max_length=256,
             retrieval_use_fp16=True,
             retrieval_batch_size=self.config.retrieval_batch_size,
+            faiss_nprobe=self.config.faiss_nprobe,
         )
         return get_retriever(retriever_config)
 

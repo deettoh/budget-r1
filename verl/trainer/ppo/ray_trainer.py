@@ -548,6 +548,7 @@ class RayPPOTrainer(object):
             retriever_model=self.config.retriever.model_path,
             faiss_gpu=self.config.retriever.faiss_gpu,
             retrieval_batch_size=self.config.retriever.batch_size,
+            faiss_nprobe=self.config.retriever.get('faiss_nprobe', None),
             enable_budget_planner=self.config.budget_planner.enabled,
             max_budget=self.config.budget_planner.max_budget,
         )
@@ -972,6 +973,7 @@ class RayPPOTrainer(object):
             retriever_model=self.config.retriever.model_path,
             faiss_gpu=self.config.retriever.faiss_gpu,
             retrieval_batch_size=self.config.retriever.batch_size,
+            faiss_nprobe=self.config.retriever.get('faiss_nprobe', None),
             enable_budget_planner=self.config.budget_planner.enabled,
             max_budget=self.config.budget_planner.max_budget,
         )

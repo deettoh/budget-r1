@@ -169,6 +169,7 @@ retriever:
   model_path: intfloat/e5-base-v2
   faiss_gpu: true
   batch_size: 512
+  faiss_nprobe: null  # frozen IVF nprobe; null = index default
 
 budget_planner:
   enabled: false
