@@ -38,6 +38,8 @@ from verl.utils.model import compute_position_id_with_mask
 from verl.utils.flops_counter import FlopsCounter
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 
+from search_r1.lora_utils import resolve_adapter_path, strip_fsdp_prefix
+
 from codetiming import Timer
 
 logger = logging.getLogger(__file__)
@@ -184,16 +186,23 @@ class ActorRolloutRefWorker(Worker):
         torch.distributed.barrier()
 
         if should_wrap_lora:
-            from peft import LoraConfig, get_peft_model
-            peft_config = LoraConfig(
-                r=lora_config.get('r', 64),
-                lora_alpha=lora_config.get('alpha', 128),
-                lora_dropout=lora_config.get('dropout', 0.05),
-                target_modules=list(lora_config.get('target_modules', [])),
-                bias='none',
-                task_type='CAUSAL_LM',
-            )
-            actor_module = get_peft_model(actor_module, peft_config)
+            from peft import LoraConfig, PeftModel, get_peft_model
+            adapter_path = resolve_adapter_path(lora_config)
+            if adapter_path is not None:
+                # resume adapters, rank/targets come from the saved dir
+                actor_module = PeftModel.from_pretrained(
+                    actor_module, adapter_path, is_trainable=True)
+            else:
+                peft_config = LoraConfig(
+                    r=lora_config.get('r', 64),
+                    lora_alpha=lora_config.get('alpha', 128),
+                    lora_dropout=lora_config.get('dropout', 0.05),
+                    target_modules=list(
+                        lora_config.get('target_modules', [])),
+                    bias='none',
+                    task_type='CAUSAL_LM',
+                )
+                actor_module = get_peft_model(actor_module, peft_config)
             # cast adapters to bf16, fsdp flatten needs one dtype
             actor_module = actor_module.to(torch_dtype)
             if enable_gradient_checkpointing:
@@ -584,7 +593,7 @@ class ActorRolloutRefWorker(Worker):
             from peft.utils import get_peft_model_state_dict
             from safetensors.torch import save_file
             full_sd = {
-                name.replace('_fsdp_wrapped_module.', ''): param.detach().cpu()
+                strip_fsdp_prefix(name): param.detach().cpu()
                 for name, param in self.actor_module_fsdp.named_parameters()
             }
             adapter_sd = get_peft_model_state_dict(
