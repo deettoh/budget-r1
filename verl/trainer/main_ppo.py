@@ -255,6 +255,24 @@ def main(config):
     ray.get(main_task.remote(config))
 
 
+def _send_training_alert(config, title: str, text: str, level: str) -> None:
+    """Send a wandb alert for the run end, never raise.
+
+    Fires only with wandb enabled and a run active. Any wandb-side
+    failure is logged and swallowed so it cannot take down training.
+    """
+    if "wandb" not in config.trainer.logger:
+        return
+    try:
+        import wandb
+
+        if wandb.run is None:
+            return
+        wandb.alert(title=title, text=text, level=level)
+    except Exception as exc:  # best-effort notifier; log and move on
+        print(f"[wandb-alert] could not send alert: {exc}")
+
+
 @ray.remote
 def main_task(config):
     from verl.utils.fs import copy_local_path_from_hdfs
@@ -353,7 +371,27 @@ def main_task(config):
         val_reward_fn=val_reward_fn,
     )
     trainer.init_workers()
-    trainer.fit()
+    exp_name = config.trainer.experiment_name
+    try:
+        trainer.fit()
+    except Exception as exc:
+        _send_training_alert(
+            config,
+            title=f"Search-R1 training FAILED: {exp_name}",
+            text=f"{type(exc).__name__}: {exc}",
+            level="ERROR",
+        )
+        raise
+    else:
+        _send_training_alert(
+            config,
+            title=f"Search-R1 training complete: {exp_name}",
+            text=(
+                f"Finished {config.trainer.total_training_steps} "
+                "training steps."
+            ),
+            level="INFO",
+        )
 
 
 if __name__ == "__main__":
