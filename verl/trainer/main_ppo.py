@@ -239,6 +239,9 @@ def main(config):
             "RAY_EXPERIMENTAL_NOSET_TPU_VISIBLE_CHIPS", "1"
         )
 
+        # surface the sharding-manager mem trace for rollout-sync OOMs
+        os.environ.setdefault("VERL_PPO_LOGGING_LEVEL", "INFO")
+
         # expandable_segments reuses fragments so vLLM + actor fit 24gb
         os.environ.setdefault(
             "PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True"
