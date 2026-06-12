@@ -16,12 +16,17 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 def load_corpus(corpus_path: str):
-    corpus = datasets.load_dataset(
-        'json', 
-        data_files=corpus_path,
-        split="train",
-        num_proc=4
-    )
+    """Load the JSONL corpus directly into a list of dicts.
+
+    Avoids datasets.load_dataset which cached a malformed corpus and
+    wrote a multi-gb arrow cache that blew the disk quota.
+    """
+    corpus = []
+    with open(corpus_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                corpus.append(json.loads(line))
     return corpus
 
 def read_jsonl(file_path):
