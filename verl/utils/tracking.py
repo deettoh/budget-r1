@@ -61,6 +61,14 @@ class Tracking(object):
             if backend is None or default_backend in backend:
                 logger_instance.log(data=data, step=step)
 
+    def finish(self):
+        # without finish() wandb marks the exited run "crashed"
+        if 'wandb' in self.logger:
+            self.logger['wandb'].finish()
+        if 'mlflow' in self.logger:
+            import mlflow
+            mlflow.end_run()
+
 
 class _MlflowLoggingAdapter:
 

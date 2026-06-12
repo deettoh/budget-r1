@@ -949,6 +949,7 @@ class RayPPOTrainer(object):
             pprint(f"Initial validation metrics: {val_metrics}")
             logger.log(data=val_metrics, step=self.global_steps)
             if self.config.trainer.get("val_only", False):
+                logger.finish()
                 return
 
         # we start from step 1
@@ -1199,6 +1200,7 @@ class RayPPOTrainer(object):
                         pprint(f"Final validation metrics: {val_metrics}")
                         logger.log(data=val_metrics, step=self.global_steps)
                         self._maybe_save_best_checkpoint(val_metrics)
+                    logger.finish()
                     return
 
     def _create_loss_mask(self, batch, metrics):
