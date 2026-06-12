@@ -11,6 +11,13 @@ from __future__ import annotations
 import os
 
 
+# drop ~/.local from sys.path so its torch can't shadow conda's
+import sys as _sys
+import site as _site
+_user_base = _site.getuserbase()
+_sys.path[:] = [p for p in _sys.path if not p.startswith(_user_base)]
+
+
 # an instance not a function or pathlib binds it as a method
 _orig_listdir = os.listdir
 
