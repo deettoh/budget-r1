@@ -30,6 +30,9 @@ try:
 except ImportError:
     FLAH_ATTN_CROSS_ENTROPY_LOSS_AVAILABLE = False
 
+# force pure-torch log-prob HPC blocks the flash-attn Triton JIT
+FLAH_ATTN_CROSS_ENTROPY_LOSS_AVAILABLE = False
+
 
 def gather_from_labels(data, label):
     """Gather the label from data. The value in label should be [0, vocab_size)
