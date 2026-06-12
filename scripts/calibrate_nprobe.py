@@ -139,6 +139,11 @@ def main() -> None:
 
     recalls = {}
     for nprobe in nprobes:
+        if (gold_source == "ivf_exhaustive"
+                and nprobe == _EXHAUSTIVE_NPROBE):
+            # exhaustive vs itself, skip the costly repeat search
+            recalls[nprobe] = 1.0
+            continue
         faiss.ParameterSpace().set_index_parameter(
             ivf, "nprobe", nprobe)
         pred = _search_ids(ivf, query_emb, args.topk)
