@@ -208,11 +208,48 @@ import hydra
 @hydra.main(config_path="config", config_name="ppo_trainer", version_base=None)
 def main(config):
     if not ray.is_initialized():
-        # this is for local ray cluster
+        # stub psutil + drop stale RAY_ADDRESS for the locked-down node
+        import os
+        import psutil
+        psutil.pids = lambda: []
+        psutil.Process.parents = lambda self: []
+        os.environ.pop("RAY_ADDRESS", None)
+
+        # Ray's accelerator probe listdirs /dev/vfio which HPC blocks
+        _orig_listdir = os.listdir
+        def _hpc_safe_listdir(path):
+            try:
+                return _orig_listdir(path)
+            except PermissionError:
+                p = path.decode(errors="replace") if isinstance(path, bytes) else str(path)
+                if p.startswith("/dev") or p.startswith("/proc"):
+                    return []
+                raise
+        os.listdir = _hpc_safe_listdir
+
+        # set env before ray.init, runtime_env= would use bash (blocked)
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "true")
+        os.environ.setdefault("NCCL_DEBUG", "WARN")
+
+        # disable Ray's child killer it SIGABRTs reading /proc
+        os.environ.setdefault("RAY_kill_child_processes_on_worker_exit", "false")
+
+        # skip Ray's TPU chip probe it listdirs /dev/vfio in the worker
+        os.environ.setdefault(
+            "RAY_EXPERIMENTAL_NOSET_TPU_VISIBLE_CHIPS", "1"
+        )
+
+        # expandable_segments reuses fragments so vLLM + actor fit 24gb
+        os.environ.setdefault(
+            "PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True"
+        )
+
+        # this is for local ray cluster.
+        # keep Ray's object store off /dev/shm which HPC restricts
         ray.init(
-            runtime_env={
-                "env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN"}
-            }
+            address="local",
+            object_store_memory=4 * 1024 ** 3,
+            _plasma_directory="/tmp",
         )
 
     ray.get(main_task.remote(config))
