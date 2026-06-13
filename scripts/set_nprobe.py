@@ -16,11 +16,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--index", required=True)
     parser.add_argument("--nprobe", type=int, required=True)
+    parser.add_argument("--dry_run", action="store_true",
+                        help="print the persisted nprobe and exit")
     args = parser.parse_args()
 
     index = faiss.read_index(args.index)
     ivf = faiss.extract_index_ivf(index)
     print(f"current nprobe: {ivf.nprobe}")
+    if args.dry_run:
+        print("dry run, no rewrite")
+        return
     if ivf.nprobe == args.nprobe:
         print("already frozen at target, no rewrite")
         return
