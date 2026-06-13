@@ -264,6 +264,9 @@ class LLMGenerationManager:
             rollings_active = DataProto.from_dict({
                 k: v[active_mask] for k, v in rollings.batch.items()
             })            
+            # re-attach meta_info dropped by from_dict so do_sample /
+            # recompute_log_prob reach generate_sequences
+            rollings_active.meta_info = rollings.meta_info
             gen_output = self._generate_with_gpu_padding(rollings_active)
 
             meta_info = gen_output.meta_info            
@@ -312,6 +315,9 @@ class LLMGenerationManager:
             rollings_active = DataProto.from_dict({
                 k: v[active_mask] for k, v in rollings.batch.items()
             })            
+            # re-attach meta_info dropped by from_dict so do_sample /
+            # recompute_log_prob reach generate_sequences
+            rollings_active.meta_info = rollings.meta_info
             gen_output = self._generate_with_gpu_padding(rollings_active)
 
             meta_info = gen_output.meta_info            
