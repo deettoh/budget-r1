@@ -599,7 +599,9 @@ If I want to give the final answer, I should put the answer between <answer> and
             faiss_gpu=self.config.faiss_gpu,
             retrieval_model_path=self.config.retriever_model,
             retrieval_pooling_method="mean",
-            retrieval_query_max_length=256,
+            # cap query encode at 64 the untrained policy emits ~256-tok
+            # <search> strings that dominate rollout retrieval time
+            retrieval_query_max_length=64,
             retrieval_use_fp16=True,
             retrieval_batch_size=self.config.retrieval_batch_size,
             faiss_nprobe=self.config.faiss_nprobe,
