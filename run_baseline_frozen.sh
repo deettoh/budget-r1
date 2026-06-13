@@ -4,9 +4,7 @@
 #SBATCH --output=logs/output_%j.txt
 #SBATCH --error=logs/error_%j.txt
 
-# Baseline 3/3 (updated_plan §4c): frozen Search-R1 3B-it agentic
-# loop, no LoRA/control = the published method as-is. max_turns=8
-# matches the premise check; this is the §1 Baseline condition.
+# frozen search-r1 3b-it as published, turns matched to trained cells
 
 mkdir -p logs
 mkdir -p outputs
