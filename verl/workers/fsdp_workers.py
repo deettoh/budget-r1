@@ -137,6 +137,11 @@ class ActorRolloutRefWorker(Worker):
         else:
             torch_dtype = PrecisionType.to_dtype(torch_dtype)
 
+        # val_only eval can't fit the fp32 actor (~11.5gb) beside vllm
+        # on 24gb so force bf16 weights defaults off training unchanged
+        if self.config.model.get('inference_bf16', False):
+            torch_dtype = torch.bfloat16
+
         lora_config = self.config.model.get('lora', None)
         should_wrap_lora = (
             bool(lora_config)
