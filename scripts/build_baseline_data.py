@@ -1,12 +1,8 @@
-"""Rewrite the eval parquet prompts for the no-RAG / naive-RAG baselines.
+"""Rewrite eval parquet prompts for the no-RAG and naive-RAG baselines.
 
-Reads an existing Search-R1 RL test parquet, extracts the raw
-question from each agentic prompt, and rebuilds the prompt as either
-a closed-book prompt (no retrieval) or a single retrieve-then-read
-prompt with the top-k passages injected up front. Wording mirrors
-the Search-R1 template so the only change vs the frozen baseline is
-the retrieval regime. The naive-RAG mode retrieves once per question
-through the same IVF index used by the agentic runs.
+Extracts the raw question from each agentic prompt and rebuilds it as
+closed-book or single retrieve-then-read. Wording mirrors the Search-R1
+template so the retrieval regime is the only change vs the frozen bar.
 """
 
 import argparse
@@ -57,6 +53,7 @@ def _retrieve_passages(questions: list, args) -> list:
     """Return one formatted passage block per question via the IVF."""
     from search_r1.search.retrieval_server import Config, get_retriever
 
+    # nprobe 512 is baked into the index, no kwarg needed
     retriever = get_retriever(Config(
         retrieval_method=args.retriever_name,
         retrieval_topk=args.topk,
@@ -68,7 +65,6 @@ def _retrieve_passages(questions: list, args) -> list:
         retrieval_query_max_length=256,
         retrieval_use_fp16=True,
         retrieval_batch_size=args.batch_size,
-        faiss_nprobe=args.nprobe,
     ))
     results, scores = retriever.batch_search(
         query_list=questions, num=args.topk, return_score=True)
@@ -97,7 +93,8 @@ def main() -> None:
     parser.add_argument("--retriever_model",
                         default="intfloat/e5-base-v2")
     parser.add_argument("--topk", type=int, default=3)
-    parser.add_argument("--nprobe", type=int, default=512)
+    parser.add_argument("--nprobe", type=int, default=512,
+                        help="informational; nprobe is baked into index")
     parser.add_argument("--batch_size", type=int, default=512)
     args = parser.parse_args()
 
