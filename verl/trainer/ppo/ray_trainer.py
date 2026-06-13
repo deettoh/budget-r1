@@ -531,6 +531,9 @@ class RayPPOTrainer(object):
 
         reward_tensor_lst = []
         data_source_lst = []
+        # RewardManager resets last_metrics each __call__ so accumulate
+        # per-sample dicts across val batches, not just the last one
+        val_per_sample = []
 
         gen_config = GenerationConfig(
             max_turns=self.config.max_turns,
@@ -602,6 +605,9 @@ class RayPPOTrainer(object):
                 # evaluate using reward_function
                 # for certain reward function (e.g. sandbox), the generation can overlap with reward
                 reward_tensor = self.val_reward_fn(test_batch)
+                val_per_sample.extend(
+                    getattr(self.val_reward_fn, "last_metrics", None) or []
+                )
 
                 reward_tensor_lst.append(reward_tensor)
                 data_source_lst.append(
@@ -644,6 +650,9 @@ class RayPPOTrainer(object):
                     # evaluate using reward_function
                     # for certain reward function (e.g. sandbox), the generation can overlap with reward
                     reward_tensor = self.val_reward_fn(test_batch)
+                    val_per_sample.extend(
+                        getattr(self.val_reward_fn, "last_metrics", None) or []
+                    )
 
                     reward_tensor_lst.append(reward_tensor)
                     data_source_lst.append(
@@ -669,7 +678,7 @@ class RayPPOTrainer(object):
         for data_source, rewards in data_source_reward.items():
             metric_dict[f"val/test_score/{data_source}"] = float(np.mean(rewards))
 
-        per_sample = getattr(self.val_reward_fn, "last_metrics", None) or []
+        per_sample = val_per_sample
         if per_sample:
             buckets: dict[str, dict[str, list]] = {}
             for entry in per_sample:
@@ -724,6 +733,22 @@ class RayPPOTrainer(object):
                     metric_dict[f"val/declared_budget/{source}"] = float(
                         np.mean(bucket["declared_budget"])
                     )
+
+        # val_only dumps raw per-sample metrics for offline analysis
+        # gated so training stays byte-identical
+        if self.config.trainer.get("val_only", False) and per_sample:
+            import json
+            import os
+
+            os.makedirs("outputs", exist_ok=True)
+            dump_path = os.path.join(
+                "outputs",
+                f"premise_eval_{self.config.trainer.experiment_name}.json",
+            )
+            with open(dump_path, "w") as f:
+                json.dump(per_sample, f)
+            print(f"[premise] dumped {len(per_sample)} samples -> "
+                  f"{dump_path}")
 
         return metric_dict
 
