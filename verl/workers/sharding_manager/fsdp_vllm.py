@@ -57,7 +57,9 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         if full_params:
             FSDP.set_state_dict_type(self.module,
                                      state_dict_type=StateDictType.FULL_STATE_DICT,
-                                     state_dict_config=FullStateDictConfig())
+                                     state_dict_config=FullStateDictConfig(
+                                         offload_to_cpu=True,
+                                         rank0_only=False))
         else:
             FSDP.set_state_dict_type(self.module,
                                      state_dict_type=StateDictType.SHARDED_STATE_DICT,
@@ -116,6 +118,14 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             log_gpu_memory_usage('Before state_dict() in sharding manager memory', logger=logger)
             params = self.module.state_dict()
             log_gpu_memory_usage('After state_dict() in sharding manager memory', logger=logger)
+            # stage full-FT weights to cpu so they don't sit on the
+            # 24gb card beside vllm during the sync
+            params = {
+                k: v.to('cpu') if hasattr(v, 'is_cuda') and v.is_cuda else v
+                for k, v in params.items()
+            }
+        torch.cuda.empty_cache()
+        log_gpu_memory_usage('After staging state_dict to CPU in sharding manager', logger=logger)
         # Copy, not share memory
         load_format = 'hf' if self.full_params else 'dtensor'
         self.inference_engine.sync_model_weights(params, load_format=load_format)
