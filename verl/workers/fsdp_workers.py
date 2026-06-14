@@ -152,6 +152,21 @@ class ActorRolloutRefWorker(Worker):
         if should_wrap_lora:
             torch_dtype = torch.bfloat16
 
+        # QLoRA loads the frozen base in 4-bit nf4 to fit the actor
+        # backward on 24gb quant_storage=bf16 lets fsdp flatten it
+        quant_4bit = bool(should_wrap_lora) and lora_config.get(
+            'quant_4bit', False)
+        bnb_config = None
+        if quant_4bit:
+            from transformers import BitsAndBytesConfig
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type='nf4',
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_storage=torch.bfloat16,
+            )
+
         # override model kwargs
         actor_model_config = AutoConfig.from_pretrained(local_path, trust_remote_code=trust_remote_code)
 
@@ -182,9 +197,11 @@ class ActorRolloutRefWorker(Worker):
                                                                 torch_dtype=torch_dtype,
                                                                 config=actor_model_config,
                                                                 attn_implementation='flash_attention_2',
+                                                                quantization_config=bnb_config,
                                                                 trust_remote_code=trust_remote_code)
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
-            actor_module.to(torch_dtype)
+            if not quant_4bit:
+                actor_module.to(torch_dtype)
 
             if enable_gradient_checkpointing:
                 actor_module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
@@ -209,7 +226,13 @@ class ActorRolloutRefWorker(Worker):
                 )
                 actor_module = get_peft_model(actor_module, peft_config)
             # cast adapters to bf16, fsdp flatten needs one dtype
-            actor_module = actor_module.to(torch_dtype)
+            if quant_4bit:
+                # 4-bit base can't be cast cast only the bf16 adapters
+                for p in actor_module.parameters():
+                    if p.requires_grad and p.dtype != torch.bfloat16:
+                        p.data = p.data.to(torch.bfloat16)
+            else:
+                actor_module = actor_module.to(torch_dtype)
             if enable_gradient_checkpointing:
                 # route grad to adapters through the frozen base
                 actor_module.enable_input_require_grads()
