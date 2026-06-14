@@ -26,6 +26,7 @@ actor_rollout_ref:
     lora:
       enabled: false  # when true, freeze base and train LoRA adapters only
       adapter_path: null  # dir to resume adapters from, null = fresh
+      quant_4bit: false  # QLoRA: load frozen base in 4-bit (nf4) to fit 24gb
       r: 64
       alpha: 128
       dropout: 0.05
