@@ -79,26 +79,33 @@ class FSDPVLLMShardingManager(BaseShardingManager):
     def _lora_merged_cpu_state_dict(self):
         """Return merged base weights on CPU without mutating the actor.
 
-        Adds each LoRA delta to its base weight in a fresh tensor
-        instead of merge_adapter(), which reassigns the base layer
-        weight and desyncs the FSDP use_orig_params flat param -- the
-        next grad forward's writeback then crashes. At world size 1
-        the actor is NO_SHARD so named_parameters() exposes full local
-        tensors copied straight to CPU, with no FSDP gather clone to
-        OOM beside the co-resident vLLM.
+        Adds each delta in a fresh tensor, not merge_adapter, which
+        would desync the FSDP flat param and crash the next forward.
         """
         # map base-weight id to its lora layer
+        # capture the 4-bit quant_state to dequantize before the merge
         layers = {}
+        quant = {}
         for module in self.module.modules():
             if (hasattr(module, 'get_delta_weight')
                     and hasattr(module, 'get_base_layer')
                     and hasattr(module, 'active_adapters')):
-                layers[id(module.get_base_layer().weight)] = module
+                base_w = module.get_base_layer().weight
+                layers[id(base_w)] = module
+                qs = getattr(base_w, 'quant_state', None)
+                if qs is not None:
+                    quant[id(base_w)] = (base_w, qs)
         cleaned = {}
         for name, param in self.module.named_parameters():
             if 'lora_' in name:
                 continue
-            weight = param.detach()
+            if id(param) in quant:
+                import bitsandbytes.functional as bnb_F
+                base_w, qs = quant[id(param)]
+                weight = bnb_F.dequantize_4bit(
+                    base_w.data, qs).to(torch.bfloat16)
+            else:
+                weight = param.detach()
             layer = layers.get(id(param))
             if layer is not None:
                 for adapter in layer.active_adapters:
