@@ -7,6 +7,7 @@ from search_r1.budgeting import (
     BudgetRewardConfig,
     compute_budget_reward,
     parse_budget_declaration,
+    should_force_search,
 )
 
 
@@ -49,6 +50,26 @@ class BudgetingTest(unittest.TestCase):
 
         self.assertTrue(math.isclose(score, -0.18))
         self.assertEqual(parts["unused_budget_penalty"], 0.0)
+
+
+class ForceSearchTest(unittest.TestCase):
+    def test_no_force_when_bootstrap_inactive(self):
+        for declared in (-1, 0, 3):
+            self.assertFalse(should_force_search(declared, 0, False))
+
+    def test_no_force_without_a_declaration(self):
+        self.assertFalse(should_force_search(-1, 0, True))
+
+    def test_no_force_when_declared_zero(self):
+        self.assertFalse(should_force_search(0, 0, True))
+
+    def test_force_until_declared_calls_are_used(self):
+        self.assertTrue(should_force_search(3, 0, True))
+        self.assertTrue(should_force_search(3, 2, True))
+
+    def test_no_force_once_declared_budget_reached(self):
+        self.assertFalse(should_force_search(3, 3, True))
+        self.assertFalse(should_force_search(3, 4, True))
 
 
 if __name__ == "__main__":

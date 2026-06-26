@@ -37,6 +37,20 @@ def parse_budget_declaration(text: str, max_budget: int = 5) -> Optional[int]:
     return None
 
 
+def should_force_search(
+    declared_budget: int, search_count: int, force_active: bool
+) -> bool:
+    """Return True if an early answer must be blocked to force search.
+
+    Bootstrap-only scaffolding for the budget planner: while forcing is
+    active, a sample that declared ``k >= 1`` may not answer until it has
+    used its declared calls, so declaring k binds the cap and reopens the
+    k->N->R_answer gradient. Pure and config-free; callers gate it on
+    ``enable_budget_planner`` and the train-vs-eval split.
+    """
+    return force_active and declared_budget >= 1 and search_count < declared_budget
+
+
 def compute_budget_reward(
     answer_score: float,
     valid_search_calls: int,
