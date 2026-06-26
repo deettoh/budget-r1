@@ -51,6 +51,14 @@ def should_force_search(
     return force_active and declared_budget >= 1 and search_count < declared_budget
 
 
+def curriculum_gamma(base_gamma: float, force_active: bool) -> float:
+    """Return 0 while forcing is active, else ``base_gamma``.
+
+    Suppresses the unused-budget penalty only in the forcing window.
+    """
+    return 0.0 if force_active else base_gamma
+
+
 def compute_budget_reward(
     answer_score: float,
     valid_search_calls: int,

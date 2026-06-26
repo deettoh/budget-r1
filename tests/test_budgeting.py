@@ -6,6 +6,7 @@ import unittest
 from search_r1.budgeting import (
     BudgetRewardConfig,
     compute_budget_reward,
+    curriculum_gamma,
     parse_budget_declaration,
     should_force_search,
 )
@@ -70,6 +71,14 @@ class ForceSearchTest(unittest.TestCase):
     def test_no_force_once_declared_budget_reached(self):
         self.assertFalse(should_force_search(3, 3, True))
         self.assertFalse(should_force_search(3, 4, True))
+
+
+class CurriculumGammaTest(unittest.TestCase):
+    def test_gamma_passes_through_when_not_forcing(self):
+        self.assertEqual(curriculum_gamma(0.01, False), 0.01)
+
+    def test_gamma_zeroed_while_forcing(self):
+        self.assertEqual(curriculum_gamma(0.01, True), 0.0)
 
 
 if __name__ == "__main__":
