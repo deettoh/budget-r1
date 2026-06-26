@@ -22,7 +22,11 @@ from verl.utils.reward_score import qa_metrics
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 import re
 import numpy as np
-from search_r1.budgeting import BudgetRewardConfig, compute_budget_reward
+from search_r1.budgeting import (
+    BudgetRewardConfig,
+    compute_budget_reward,
+    curriculum_gamma,
+)
 
 
 def _select_rm_score_fn(data_source):
@@ -63,12 +67,21 @@ class RewardManager:
             and self.cost_reward_config.get("enabled", False)
         )
 
-    def _budget_reward_config(self) -> BudgetRewardConfig:
-        """Build the frozen alpha/beta/gamma config from Hydra."""
+    def _budget_reward_config(
+        self, force_active: bool = False
+    ) -> BudgetRewardConfig:
+        """Build the frozen alpha/beta/gamma config from Hydra.
+
+        ``force_active`` zeroes gamma during bootstrap forced execution
+        (the gamma-curriculum); default keeps the base coefficient.
+        """
         return BudgetRewardConfig(
             alpha=float(self.cost_reward_config.get("alpha", 0.05)),
             beta=float(self.cost_reward_config.get("beta", 0.0001)),
-            gamma=float(self.cost_reward_config.get("gamma", 0.01)),
+            gamma=curriculum_gamma(
+                float(self.cost_reward_config.get("gamma", 0.01)),
+                force_active,
+            ),
         )
 
     def _token_costs(self, data_item, prompt_length) -> tuple[int, int]:
@@ -106,6 +119,10 @@ class RewardManager:
 
         already_print_data_sources = {}
         self.reset_metrics()
+
+        # gamma-curriculum, set while forcing is active
+        # so the unused-budget penalty is suppressed
+        force_active = bool(data.meta_info.get("force_active", False))
 
         for i in range(len(data)):
             data_item = data[i]  # DataProtoItem
@@ -169,7 +186,7 @@ class RewardManager:
                     generated_tokens=generated_tokens,
                     retrieved_tokens=retrieved_tokens,
                     declared_budget=effective_budget,
-                    config=self._budget_reward_config(),
+                    config=self._budget_reward_config(force_active),
                 )
             else:
                 score = answer_score

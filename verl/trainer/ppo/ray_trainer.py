@@ -1030,6 +1030,17 @@ class RayPPOTrainer(object):
                 ####################
                 # original code here
 
+                # forced execution is train-only, annealed off after
+                # until_step, default off keeps the baseline identical
+                forced_exec = self.config.budget_planner.get(
+                    "forced_exec", {}
+                )
+                force_active = bool(
+                    forced_exec.get("enabled", False)
+                ) and self.global_steps <= int(
+                    forced_exec.get("until_step", 0)
+                )
+
                 with _timer("step", timing_raw):
                     if not self.config.do_search:
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(
@@ -1058,18 +1069,6 @@ class RayPPOTrainer(object):
                             ]
                             .clone()
                             .long()
-                        )
-
-                        # bootstrap forced execution is train-only and
-                        # annealed off after until_step; default off keeps
-                        # the baseline byte-identical
-                        forced_exec = self.config.budget_planner.get(
-                            "forced_exec", {}
-                        )
-                        force_active = bool(
-                            forced_exec.get("enabled", False)
-                        ) and self.global_steps <= int(
-                            forced_exec.get("until_step", 0)
                         )
 
                         with _timer("gen", timing_raw):
@@ -1148,6 +1147,9 @@ class RayPPOTrainer(object):
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
                             batch = batch.union(reward_tensor)
 
+                        # gamma-curriculum, reward manager zeroes the
+                        # unused-budget gamma while forcing is active
+                        batch.meta_info["force_active"] = force_active
                         # we combine with rule-based rm
                         reward_tensor = self.reward_fn(batch)
                         batch.batch["token_level_scores"] = reward_tensor
