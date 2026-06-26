@@ -9,7 +9,7 @@ from verl import DataProto
 from verl.utils.tracking import Tracking
 import shutil
 import requests
-from search_r1.budgeting import parse_budget_declaration
+from search_r1.budgeting import parse_budget_declaration, should_force_search
 
 @dataclass
 class GenerationConfig:
@@ -235,8 +235,13 @@ class LLMGenerationManager:
         padded_output.batch = trimmed_batch
         return padded_output
 
-    def run_llm_loop(self, gen_batch, initial_input_ids: torch.Tensor) -> Tuple[Dict, Dict]:
-        """Run main LLM generation loop."""
+    def run_llm_loop(self, gen_batch, initial_input_ids: torch.Tensor,
+                     force_search_active: bool = False) -> Tuple[Dict, Dict]:
+        """Run main LLM generation loop.
+
+        force_search_active is the train-only forced-execution switch,
+        eval leaves it False so adaptivity is measured unforced.
+        """
         
         original_left_side = {'input_ids': initial_input_ids[:, -self.config.max_start_length:]}
         original_right_side = {'responses': initial_input_ids[:, []], 'responses_with_info_mask': initial_input_ids[:, []]}
@@ -281,6 +286,7 @@ class LLMGenerationManager:
                 declared_budgets=declared_budgets,
                 search_counts=search_counts,
                 blocked_search_counts=blocked_search_counts,
+                force_search_active=force_search_active,
             )
             
             curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
@@ -409,6 +415,7 @@ class LLMGenerationManager:
         declared_budgets=None,
         search_counts=None,
         blocked_search_counts=None,
+        force_search_active=False,
     ) -> List[str]:
         """
         Execute predictions across multiple environments.
@@ -487,10 +494,29 @@ class LLMGenerationManager:
                     valid_action.append(0)
                     is_search.append(0)
                 elif action == 'answer':
-                    next_obs.append('')
-                    dones.append(1)
-                    valid_action.append(1)
-                    is_search.append(0)
+                    if (
+                        do_search
+                        and self.config.enable_budget_planner
+                        and should_force_search(
+                            declared_budgets[i],
+                            search_counts[i],
+                            force_search_active,
+                        )
+                    ):
+                        # bootstrap, block early answer so declared k
+                        # binds the cap and reopens the k->N gradient
+                        next_obs.append(
+                            '\nThe declared retrieval budget has not been '
+                            'used yet. I should search before answering.\n'
+                        )
+                        dones.append(0)
+                        valid_action.append(1)
+                        is_search.append(0)
+                    else:
+                        next_obs.append('')
+                        dones.append(1)
+                        valid_action.append(1)
+                        is_search.append(0)
                 elif action == 'search':
                     if not do_search:
                         next_obs.append('')

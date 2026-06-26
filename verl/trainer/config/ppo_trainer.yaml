@@ -175,6 +175,11 @@ retriever:
 budget_planner:
   enabled: false
   max_budget: 5
+  # bootstrap forced execution: block early answers up to declared k
+  # while global_steps <= until_step, then anneal off (train-only)
+  forced_exec:
+    enabled: false
+    until_step: 0
 
 cost_reward:
   enabled: false

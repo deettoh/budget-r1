@@ -1060,11 +1060,24 @@ class RayPPOTrainer(object):
                             .long()
                         )
 
+                        # bootstrap forced execution is train-only and
+                        # annealed off after until_step; default off keeps
+                        # the baseline byte-identical
+                        forced_exec = self.config.budget_planner.get(
+                            "forced_exec", {}
+                        )
+                        force_active = bool(
+                            forced_exec.get("enabled", False)
+                        ) and self.global_steps <= int(
+                            forced_exec.get("until_step", 0)
+                        )
+
                         with _timer("gen", timing_raw):
                             generation_manager.timing_raw = timing_raw
                             final_gen_batch_output = generation_manager.run_llm_loop(
                                 gen_batch=gen_batch,
                                 initial_input_ids=first_input_ids,
+                                force_search_active=force_active,
                             )
 
                         # final_gen_batch_output.batch.apply(lambda x: x.long(), inplace=True)
