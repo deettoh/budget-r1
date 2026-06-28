@@ -5,6 +5,7 @@ import unittest
 
 from search_r1.budgeting import (
     BudgetRewardConfig,
+    build_budget_mask,
     compute_budget_reward,
     curriculum_gamma,
     parse_budget_declaration,
@@ -79,6 +80,42 @@ class CurriculumGammaTest(unittest.TestCase):
 
     def test_gamma_zeroed_while_forcing(self):
         self.assertEqual(curriculum_gamma(0.01, True), 0.0)
+
+
+class BuildBudgetMaskTest(unittest.TestCase):
+    # budget_ids stand in for tokenized "<budget>k</budget>"
+    def test_marks_span_at_start_of_response(self):
+        response_ids = [10, 3, 11, 40, 41]
+        budget_ids = [10, 3, 11]
+        self.assertEqual(
+            build_budget_mask(response_ids, budget_ids),
+            [1, 1, 1, 0, 0],
+        )
+
+    def test_marks_span_after_leading_tokens(self):
+        response_ids = [99, 10, 3, 11, 40]
+        budget_ids = [10, 3, 11]
+        self.assertEqual(
+            build_budget_mask(response_ids, budget_ids),
+            [0, 1, 1, 1, 0],
+        )
+
+    def test_marks_only_first_occurrence(self):
+        response_ids = [10, 3, 11, 10, 3, 11]
+        budget_ids = [10, 3, 11]
+        self.assertEqual(
+            build_budget_mask(response_ids, budget_ids),
+            [1, 1, 1, 0, 0, 0],
+        )
+
+    def test_all_zeros_when_declaration_absent(self):
+        self.assertEqual(
+            build_budget_mask([40, 41, 42], [10, 3, 11]),
+            [0, 0, 0],
+        )
+
+    def test_all_zeros_when_budget_ids_empty(self):
+        self.assertEqual(build_budget_mask([1, 2, 3], []), [0, 0, 0])
 
 
 if __name__ == "__main__":

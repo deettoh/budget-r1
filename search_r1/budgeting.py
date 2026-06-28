@@ -7,7 +7,7 @@ coefficients from Hydra and calls in. Math is not duplicated.
 
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence
 
 
 _BUDGET_PATTERN = re.compile(r"^\s*<budget>\s*(\d+)\s*</budget>\s*", re.DOTALL)
@@ -35,6 +35,27 @@ def parse_budget_declaration(text: str, max_budget: int = 5) -> Optional[int]:
     if 0 <= budget <= max_budget:
         return budget
     return None
+
+
+def build_budget_mask(
+    response_ids: Sequence[int], budget_ids: Sequence[int]
+) -> list[int]:
+    """Return a 0/1 mask over the first <budget>k</budget> span.
+
+    All zeros when the declaration is empty or absent.
+    """
+    mask = [0] * len(response_ids)
+    span = len(budget_ids)
+    if span == 0 or span > len(response_ids):
+        return mask
+
+    target = list(budget_ids)
+    for start in range(len(response_ids) - span + 1):
+        if list(response_ids[start:start + span]) == target:
+            for offset in range(span):
+                mask[start + offset] = 1
+            return mask
+    return mask
 
 
 def should_force_search(
