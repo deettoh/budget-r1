@@ -230,6 +230,14 @@ class DataParallelPPOActor(BasePPOActor):
             select_keys.append('loss_mask')
         if self.config.use_kl_loss:
             select_keys.append('ref_log_prob')
+        budget_entropy_coeff = self.config.get('budget_entropy_coeff', 0.0)
+        kl_exclude_budget = self.config.get('kl_exclude_budget', False)
+        use_budget_mask = (
+            (budget_entropy_coeff != 0.0 or kl_exclude_budget)
+            and 'budget_mask' in data.batch.keys()
+        )
+        if use_budget_mask:
+            select_keys.append('budget_mask')
         batch = data.select(batch_keys=select_keys).batch
 
         # Split to make minibatch iterator for updating the actor
@@ -263,6 +271,12 @@ class DataParallelPPOActor(BasePPOActor):
                 clip_ratio = self.config.clip_ratio
                 entropy_coeff = self.config.entropy_coeff
 
+                budget_mask = None
+                if use_budget_mask:
+                    budget_mask = data['budget_mask'][
+                        :, -response_length:
+                    ].float()
+
                 # all return: (bsz, response_length)
                 entropy, log_prob = self._forward_micro_batch(micro_batch=data, temperature=temperature)
 
@@ -277,13 +291,30 @@ class DataParallelPPOActor(BasePPOActor):
                 # compute policy loss
                 policy_loss = pg_loss - entropy_loss * entropy_coeff
 
+                # extra entropy on the budget token to explore k
+                # zero coeff keeps the baseline intact
+                if (
+                    budget_mask is not None
+                    and budget_entropy_coeff != 0.0
+                    and budget_mask.sum() > 0
+                ):
+                    budget_entropy = verl_F.masked_mean(entropy, budget_mask)
+                    policy_loss = (
+                        policy_loss - budget_entropy * budget_entropy_coeff
+                    )
+
                 if self.config.use_kl_loss:
                     ref_log_prob = data['ref_log_prob']
                     # compute kl loss
                     kld = core_algos.kl_penalty(logprob=log_prob,
                                                 ref_logprob=ref_log_prob,
                                                 kl_penalty=self.config.kl_loss_type)
-                    kl_loss = masked_mean(kld, response_mask)
+                    # drop budget tokens from the kl anchor so the
+                    # declaration is not pulled back to the ref policy
+                    kl_mask = response_mask
+                    if budget_mask is not None and kl_exclude_budget:
+                        kl_mask = response_mask * (1 - budget_mask)
+                    kl_loss = masked_mean(kld, kl_mask)
 
                     policy_loss = policy_loss + kl_loss * self.config.kl_loss_coef
                     metrics['actor/kl_loss'] = kl_loss.detach().item()

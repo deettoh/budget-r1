@@ -102,7 +102,10 @@ from verl.utils.torch_functional import masked_mean
 
 
 def apply_kl_penalty(
-    data: DataProto, kl_ctrl: core_algos.AdaptiveKLController, kl_penalty="kl"
+    data: DataProto,
+    kl_ctrl: core_algos.AdaptiveKLController,
+    kl_penalty="kl",
+    exclude_budget=False,
 ):
     responses = data.batch["responses"]
     response_length = responses.size(1)
@@ -123,6 +126,10 @@ def apply_kl_penalty(
             kl_penalty=kl_penalty,
         )  # (batch_size, response_length)
         kld = kld * response_mask
+        # drop budget tokens from the in-reward kl anchor
+        if exclude_budget and "budget_mask" in data.batch:
+            budget_mask = data.batch["budget_mask"][:, -response_length:]
+            kld = kld * (1 - budget_mask)
         beta = kl_ctrl.value
     else:
         beta = 0
@@ -1160,6 +1167,9 @@ class RayPPOTrainer(object):
                                 batch,
                                 kl_ctrl=self.kl_ctrl,
                                 kl_penalty=self.config.algorithm.kl_penalty,
+                                exclude_budget=self.config.actor_rollout_ref.actor.get(
+                                    "kl_exclude_budget", False
+                                ),
                             )
                             metrics.update(kl_metrics)
                         else:
