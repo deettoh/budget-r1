@@ -82,6 +82,62 @@ class CurriculumGammaTest(unittest.TestCase):
         self.assertEqual(curriculum_gamma(0.01, True), 0.0)
 
 
+class DeclarationFloorTest(unittest.TestCase):
+    def test_penalizes_under_declaration_toward_gold(self):
+        score, parts = compute_budget_reward(
+            answer_score=1.0,
+            valid_search_calls=1,
+            generated_tokens=100,
+            retrieved_tokens=200,
+            declared_budget=1,
+            config=BudgetRewardConfig(
+                alpha=0.05, beta=0.0001, gamma=0.01, delta=0.02
+            ),
+            gold_budget=4,
+        )
+
+        self.assertTrue(math.isclose(score, 0.86))
+        self.assertTrue(
+            math.isclose(parts["under_declaration_penalty"], 0.06)
+        )
+
+    def test_no_penalty_when_delta_zero(self):
+        _, parts = compute_budget_reward(
+            answer_score=1.0,
+            valid_search_calls=1,
+            generated_tokens=100,
+            retrieved_tokens=200,
+            declared_budget=1,
+            config=BudgetRewardConfig(),
+            gold_budget=4,
+        )
+
+        self.assertEqual(parts["under_declaration_penalty"], 0.0)
+
+    def test_no_penalty_when_gold_absent_or_met(self):
+        _, parts_none = compute_budget_reward(
+            answer_score=0.0,
+            valid_search_calls=1,
+            generated_tokens=0,
+            retrieved_tokens=0,
+            declared_budget=1,
+            config=BudgetRewardConfig(delta=0.1),
+            gold_budget=None,
+        )
+        _, parts_met = compute_budget_reward(
+            answer_score=0.0,
+            valid_search_calls=4,
+            generated_tokens=0,
+            retrieved_tokens=0,
+            declared_budget=5,
+            config=BudgetRewardConfig(delta=0.1),
+            gold_budget=4,
+        )
+
+        self.assertEqual(parts_none["under_declaration_penalty"], 0.0)
+        self.assertEqual(parts_met["under_declaration_penalty"], 0.0)
+
+
 class BuildBudgetMaskTest(unittest.TestCase):
     # budget_ids stand in for tokenized "<budget>k</budget>"
     def test_marks_span_at_start_of_response(self):

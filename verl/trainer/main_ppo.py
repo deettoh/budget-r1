@@ -99,6 +99,13 @@ class RewardManager:
         retrieved_tokens = max(0, total_response_tokens - generated_tokens)
         return generated_tokens, retrieved_tokens
 
+    def _gold_budget(self, data_item):
+        """Return ``extra_info.gold_budget`` if present, else None."""
+        extra = data_item.non_tensor_batch.get("extra_info")
+        if isinstance(extra, dict) and extra.get("gold_budget") is not None:
+            return int(extra["gold_budget"])
+        return None
+
     def _scalar_batch_value(self, data_item, key, default):
         """Return scalar at ``data_item.batch[key]`` or ``default``."""
         if key not in data_item.batch.keys():
@@ -187,6 +194,7 @@ class RewardManager:
                     retrieved_tokens=retrieved_tokens,
                     declared_budget=effective_budget,
                     config=self._budget_reward_config(force_active),
+                    gold_budget=self._gold_budget(data_item),
                 )
             else:
                 score = answer_score

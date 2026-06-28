@@ -15,11 +15,16 @@ _BUDGET_PATTERN = re.compile(r"^\s*<budget>\s*(\d+)\s*</budget>\s*", re.DOTALL)
 
 @dataclass(frozen=True)
 class BudgetRewardConfig:
-    """Frozen alpha/beta/gamma, ``gamma < alpha`` enforced at config layer."""
+    """Frozen alpha/beta/gamma, ``gamma < alpha`` enforced at config layer.
+
+    ``delta`` weights the declaration floor (under-declaration penalty
+    toward ``gold_budget``); default 0 keeps the baseline reward intact.
+    """
 
     alpha: float = 0.05
     beta: float = 0.0001
     gamma: float = 0.01
+    delta: float = 0.0
 
 
 def parse_budget_declaration(text: str, max_budget: int = 5) -> Optional[int]:
@@ -87,10 +92,13 @@ def compute_budget_reward(
     retrieved_tokens: int,
     declared_budget: int,
     config: BudgetRewardConfig,
+    gold_budget: Optional[int] = None,
 ) -> tuple[float, dict[str, float]]:
     """Return ``(score, parts)`` for one rollout.
 
-    ``parts`` carries each penalty component for logging.
+    ``parts`` carries each penalty component for logging. The
+    declaration floor only bites when ``gold_budget`` is given and the
+    declaration falls below it, resisting the k=1 escape hatch.
     """
     total_tokens = generated_tokens + retrieved_tokens
     retrieval_penalty = config.alpha * valid_search_calls
@@ -98,11 +106,17 @@ def compute_budget_reward(
     unused_budget_penalty = config.gamma * max(
         0, declared_budget - valid_search_calls
     )
+    under_declaration_penalty = 0.0
+    if gold_budget is not None:
+        under_declaration_penalty = config.delta * max(
+            0, gold_budget - declared_budget
+        )
     score = (
         answer_score
         - retrieval_penalty
         - token_penalty
         - unused_budget_penalty
+        - under_declaration_penalty
     )
 
     return score, {
@@ -110,5 +124,6 @@ def compute_budget_reward(
         "retrieval_penalty": retrieval_penalty,
         "token_penalty": token_penalty,
         "unused_budget_penalty": unused_budget_penalty,
+        "under_declaration_penalty": under_declaration_penalty,
         "total_tokens": total_tokens,
     }
