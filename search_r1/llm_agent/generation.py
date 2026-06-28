@@ -9,7 +9,11 @@ from verl import DataProto
 from verl.utils.tracking import Tracking
 import shutil
 import requests
-from search_r1.budgeting import parse_budget_declaration, should_force_search
+from search_r1.budgeting import (
+    build_budget_mask,
+    parse_budget_declaration,
+    should_force_search,
+)
 
 @dataclass
 class GenerationConfig:
@@ -400,11 +404,42 @@ class LLMGenerationManager:
 
         if rollout_stats is not None:
             final_output.update(rollout_stats)
-        
+
+        # budget_mask rides the DataProto tensor parallel to info_mask so
+        # it survives slicing + _balance_batch reorder for D/E downstream
+        if self.config.enable_budget_planner and rollout_stats is not None:
+            final_output['budget_mask'] = self._build_budget_mask_tensor(
+                left_side['input_ids'],
+                final_output['responses'],
+                rollout_stats['declared_budget'],
+            )
+
         final_output = DataProto.from_dict(final_output)
         final_output.meta_info.update(meta_info)
-        
+
         return final_output
+
+    def _build_budget_mask_tensor(self, prompt_ids: torch.Tensor,
+                                  responses: torch.Tensor,
+                                  declared_budgets: torch.Tensor) -> torch.Tensor:
+        """Return a full-seq 0/1 mask over each row's budget declaration.
+
+        Prompt span is all zeros, the declaration lives in the response.
+        """
+        prompt_mask = torch.zeros_like(prompt_ids)
+        response_mask = torch.zeros_like(responses)
+        for i in range(responses.size(0)):
+            k = int(declared_budgets[i].item())
+            if k < 0:
+                continue
+            budget_ids = self.tokenizer(
+                f'<budget>{k}</budget>', add_special_tokens=False
+            )['input_ids']
+            row_mask = build_budget_mask(responses[i].tolist(), budget_ids)
+            response_mask[i] = torch.tensor(
+                row_mask, dtype=responses.dtype, device=responses.device
+            )
+        return torch.cat([prompt_mask, response_mask], dim=1)
 
     def execute_predictions(
         self,
