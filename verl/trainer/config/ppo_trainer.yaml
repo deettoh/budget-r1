@@ -51,6 +51,9 @@ actor_rollout_ref:
     use_kl_loss: False # True for GRPO
     kl_loss_coef: 0.001 # for grpo
     kl_loss_type: low_var_kl # for grpo
+    # budget-planner mechanisms D and E (default off keep baseline)
+    budget_entropy_coeff: 0.0
+    kl_exclude_budget: false
     ppo_epochs: 1
     shuffle: False
     ulysses_sequence_parallel_size: 1 # sp size
@@ -186,6 +189,8 @@ cost_reward:
   alpha: 0.05
   beta: 0.0001
   gamma: 0.01
+  # declaration floor: -delta*max(0, gold_budget - declared); off by 0
+  delta: 0.0
   max_budget: ${budget_planner.max_budget}
 
 algorithm:
