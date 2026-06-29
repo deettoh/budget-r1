@@ -22,17 +22,17 @@ import os
 import re
 import sys
 
-# allow `python scripts/gold_recall_probe.py` from the repo root by
-# putting the repo root (parent of scripts/) on the path
+# thesis_qa is a standalone module (run elsewhere as a plain script,
+# not an installed package), so import it by adding its dir to the path
 sys.path.insert(
-    0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_process")
 )
 
-from scripts.data_process.thesis_qa import (  # noqa: E402
-    extract_gold_titles,
-    load_named_dataset,
-    normalize_question,
-)
+import thesis_qa  # noqa: E402
+
+extract_gold_titles = thesis_qa.extract_gold_titles
+load_named_dataset = thesis_qa.load_named_dataset
+normalize_question = thesis_qa.normalize_question
 
 _WHITESPACE = re.compile(r"\s+")
 
