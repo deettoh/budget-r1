@@ -9,28 +9,26 @@ Retriever and index pass only, no training or rollout.
 import argparse
 import json
 import os
-import re
 import sys
 
-# thesis_qa is a standalone module (run elsewhere as a plain script,
-# not an installed package), so import it by adding its dir to the path
+# thesis_qa is not an installed package, import it by path
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_process")
 )
 
 import thesis_qa  # noqa: E402
+from search_r1.budgeting import (  # noqa: E402,F401
+    normalize_title,
+    title_recall,
+)
 
 extract_gold_titles = thesis_qa.extract_gold_titles
 extract_gold_passages = thesis_qa.extract_gold_passages
 load_named_dataset = thesis_qa.load_named_dataset
 normalize_question = thesis_qa.normalize_question
 
-_WHITESPACE = re.compile(r"\s+")
-
-
-def normalize_title(title: str) -> str:
-    """Lowercase and collapse whitespace for lenient title matching."""
-    return _WHITESPACE.sub(" ", title.lower()).strip()
+# title matching is shared with the grounding reward (single source)
+recall_at_k = title_recall
 
 
 def title_from_contents(contents: str) -> str:
@@ -38,32 +36,12 @@ def title_from_contents(contents: str) -> str:
     return contents.split("\n", 1)[0].strip()
 
 
-def recall_at_k(retrieved_titles, gold_titles) -> float:
-    """Return the fraction of gold titles matched in retrieved titles.
-
-    A gold title counts as hit when it is contained in (or contains) any
-    retrieved title after normalization, tolerating minor format drift.
-    """
-    if not gold_titles:
-        return 0.0
-    retrieved_norm = [normalize_title(t) for t in retrieved_titles if t]
-    hits = 0
-    for gold in gold_titles:
-        gold_norm = normalize_title(gold)
-        if any(
-            gold_norm == r or gold_norm in r or r in gold_norm
-            for r in retrieved_norm
-        ):
-            hits += 1
-    return hits / len(gold_titles)
-
-
 def mean_recall_by_k(
     retrieved_lists: list[list[str]],
     gold_lists: list[list[str]],
     topks: list[int],
 ) -> dict[int, float]:
-    """Return ``{k: mean recall@k}`` over aligned retrieved/gold lists."""
+    """Return mean recall@k over aligned retrieved and gold lists."""
     result: dict[int, float] = {}
     for k in topks:
         if not gold_lists:
@@ -130,7 +108,7 @@ def _collect_examples(data_source: str, split: str, num: int) -> list[dict]:
 
 
 def _build_retriever(args, retrieval_topk: int):
-    """Return a local FlashRAG retriever (mirrors the rollout config)."""
+    """Return a local FlashRAG retriever, mirroring the rollout."""
     from search_r1.search.retrieval_server import Config, get_retriever
 
     config = Config(
