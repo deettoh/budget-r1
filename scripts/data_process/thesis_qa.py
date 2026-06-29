@@ -290,6 +290,7 @@ def make_rl_record(
     extra_info = {"split": split, "index": idx}
     if require_budget:
         extra_info["gold_budget"] = derive_gold_budget(example, data_source)
+        extra_info["gold_titles"] = extract_gold_titles(example, data_source)
 
     return {
         "data_source": data_source,

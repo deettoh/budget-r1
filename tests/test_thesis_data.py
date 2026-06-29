@@ -3,7 +3,11 @@
 import unittest
 
 from scripts.data_process import thesis_qa
-from scripts.data_process.thesis_qa import derive_gold_budget, make_search_prefix
+from scripts.data_process.thesis_qa import (
+    derive_gold_budget,
+    make_rl_record,
+    make_search_prefix,
+)
 
 
 class ThesisDataTest(unittest.TestCase):
@@ -69,6 +73,33 @@ class ThesisDataTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             derive_gold_budget(example, "hotpotqa")
+
+
+class MakeRlRecordTest(unittest.TestCase):
+    def _example(self):
+        return {
+            "question": "Who wrote the book?",
+            "golden_answers": ["Ada"],
+            "supporting_facts": [["Title A", 0], ["Title B", 1]],
+        }
+
+    def test_gold_titles_added_when_require_budget(self):
+        rec = make_rl_record(
+            self._example(), 0, "hotpotqa", "dev",
+            require_budget=True, max_budget=5,
+        )
+        self.assertEqual(
+            rec["extra_info"]["gold_titles"], ["Title A", "Title B"]
+        )
+        self.assertEqual(rec["extra_info"]["gold_budget"], 2)
+
+    def test_gold_titles_absent_without_require_budget(self):
+        rec = make_rl_record(
+            self._example(), 0, "hotpotqa", "dev",
+            require_budget=False, max_budget=5,
+        )
+        self.assertNotIn("gold_titles", rec["extra_info"])
+        self.assertNotIn("gold_budget", rec["extra_info"])
 
 
 if __name__ == "__main__":
