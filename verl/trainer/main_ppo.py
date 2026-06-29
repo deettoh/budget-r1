@@ -26,7 +26,9 @@ from search_r1.budgeting import (
     BudgetRewardConfig,
     compute_budget_reward,
     curriculum_gamma,
+    parse_retrieved_titles,
     select_answer_reward,
+    title_recall,
 )
 
 
@@ -106,6 +108,34 @@ class RewardManager:
         if isinstance(extra, dict) and extra.get("gold_budget") is not None:
             return int(extra["gold_budget"])
         return None
+
+    def _gold_titles(self, data_item) -> list:
+        """Return ``extra_info.gold_titles`` if present, else []."""
+        extra = data_item.non_tensor_batch.get("extra_info")
+        if isinstance(extra, dict) and extra.get("gold_titles") is not None:
+            return list(extra["gold_titles"])
+        return []
+
+    def _grounding_enabled(self) -> bool:
+        """Return True iff the gold-grounding reward term is on."""
+        grounding = (self.cost_reward_config or {}).get("grounding")
+        return bool(grounding is not None and grounding.get("enabled", False))
+
+    def _retrieved_text(
+        self, data_item, prompt_length, valid_response_ids,
+        valid_response_length, fallback,
+    ) -> str:
+        """Decode the retrieved (info-masked) span of the response.
+
+        Decodes only info_mask==0 positions so model text is not
+        credited. Falls back to the full sequence with no info_mask.
+        """
+        info_mask = data_item.batch.get("info_mask")
+        if info_mask is None:
+            return fallback
+        info_resp = info_mask[prompt_length:][:valid_response_length]
+        retrieved_ids = valid_response_ids[info_resp == 0]
+        return self.tokenizer.decode(retrieved_ids)
 
     def _cost_answer_reward(self, em_answer_score, qa):
         """Return the answer reward under cost_reward.answer_metric.
@@ -194,11 +224,25 @@ class RewardManager:
                 int(declared_budget_raw) if declared_budget_raw is not None else -1
             )
 
+            gold_recall = 0.0
+            grounding_reward = 0.0
             if self._cost_reward_enabled():
                 effective_budget = declared_budget
                 if effective_budget < 0:
                     effective_budget = int(self.cost_reward_config.get("max_budget", 5))
                 answer_reward = self._cost_answer_reward(answer_score, qa)
+                if self._grounding_enabled():
+                    retrieved_text = self._retrieved_text(
+                        data_item, prompt_length, valid_response_ids,
+                        valid_response_length, sequences_str,
+                    )
+                    gold_recall = title_recall(
+                        parse_retrieved_titles(retrieved_text),
+                        self._gold_titles(data_item),
+                    )
+                    grounding_reward = float(
+                        self.cost_reward_config["grounding"].get("lam", 0.0)
+                    ) * gold_recall
                 score, _ = compute_budget_reward(
                     answer_score=answer_reward,
                     valid_search_calls=valid_search_calls,
@@ -207,6 +251,7 @@ class RewardManager:
                     declared_budget=effective_budget,
                     config=self._budget_reward_config(force_active),
                     gold_budget=self._gold_budget(data_item),
+                    grounding_reward=grounding_reward,
                 )
             else:
                 answer_reward = answer_score
@@ -227,6 +272,8 @@ class RewardManager:
                     "reward": float(score),
                     "answer_score": float(answer_score),
                     "answer_reward": float(answer_reward),
+                    "gold_recall": float(gold_recall),
+                    "grounding_reward": float(grounding_reward),
                 }
             )
 

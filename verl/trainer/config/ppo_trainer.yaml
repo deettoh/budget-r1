@@ -194,6 +194,8 @@ cost_reward:
   # answer reward metric: em (baseline parity) | f1 | em_f1
   answer_metric: em
   max_budget: ${budget_planner.max_budget}
+  # gold-passage grounding: +lam*recall of gold titles; off by 0
+  grounding: {enabled: false, lam: 0.0}
 
 algorithm:
   gamma: 1.0
