@@ -7,10 +7,14 @@ from search_r1.budgeting import (
     BudgetRewardConfig,
     build_budget_mask,
     compute_budget_reward,
+    compute_grounding_reward,
     curriculum_gamma,
+    normalize_title,
     parse_budget_declaration,
+    parse_retrieved_titles,
     select_answer_reward,
     should_force_search,
+    title_recall,
 )
 
 
@@ -195,6 +199,88 @@ class BuildBudgetMaskTest(unittest.TestCase):
 
     def test_all_zeros_when_budget_ids_empty(self):
         self.assertEqual(build_budget_mask([1, 2, 3], []), [0, 0, 0])
+
+
+class GroundingRewardTest(unittest.TestCase):
+    def test_normalize_title_lowers_and_collapses_space(self):
+        self.assertEqual(normalize_title("  The   Movie "), "the movie")
+
+    def test_title_recall_counts_matched_gold_by_containment(self):
+        self.assertEqual(title_recall(["a", "C", "D"], ["A", "B"]), 0.5)
+
+    def test_title_recall_zero_when_no_gold(self):
+        self.assertEqual(title_recall(["x"], []), 0.0)
+
+    def test_parse_retrieved_titles_extracts_doc_titles(self):
+        text = (
+            "stuff <information>Doc 1(Title: Alpha Beta) body one\n"
+            "Doc 2(Title: Gamma) body two\n</information> tail"
+        )
+        self.assertEqual(
+            parse_retrieved_titles(text), ["Alpha Beta", "Gamma"]
+        )
+
+    def test_parse_retrieved_titles_empty_when_no_docs(self):
+        self.assertEqual(parse_retrieved_titles("no docs here"), [])
+
+    def test_compute_grounding_reward_scales_recall_by_lambda(self):
+        self.assertTrue(
+            math.isclose(
+                compute_grounding_reward(
+                    ["Alpha", "Zeta"], ["Alpha", "Beta"], 0.3
+                ),
+                0.15,
+            )
+        )
+
+    def test_compute_grounding_reward_zero_without_gold(self):
+        self.assertEqual(
+            compute_grounding_reward(["Alpha"], [], 0.3), 0.0
+        )
+
+    def test_compute_budget_reward_adds_grounding_term(self):
+        cfg = BudgetRewardConfig(alpha=0.05, beta=0.0001, gamma=0.01)
+        base, _ = compute_budget_reward(
+            answer_score=0.0,
+            valid_search_calls=2,
+            generated_tokens=100,
+            retrieved_tokens=200,
+            declared_budget=2,
+            config=cfg,
+        )
+        withg, parts = compute_budget_reward(
+            answer_score=0.0,
+            valid_search_calls=2,
+            generated_tokens=100,
+            retrieved_tokens=200,
+            declared_budget=2,
+            config=cfg,
+            grounding_reward=0.3,
+        )
+        self.assertTrue(math.isclose(withg - base, 0.3))
+        self.assertEqual(parts["grounding_reward"], 0.3)
+
+    def test_correct_beats_incorrect_when_lambda_bounded(self):
+        cfg = BudgetRewardConfig(alpha=0.05, beta=0.0001, gamma=0.01)
+        worst_correct, _ = compute_budget_reward(
+            answer_score=1.0,
+            valid_search_calls=5,
+            generated_tokens=256,
+            retrieved_tokens=2000,
+            declared_budget=5,
+            config=cfg,
+            grounding_reward=0.0,
+        )
+        best_incorrect, _ = compute_budget_reward(
+            answer_score=0.0,
+            valid_search_calls=0,
+            generated_tokens=0,
+            retrieved_tokens=0,
+            declared_budget=0,
+            config=cfg,
+            grounding_reward=0.3,
+        )
+        self.assertGreater(worst_correct, best_incorrect)
 
 
 if __name__ == "__main__":

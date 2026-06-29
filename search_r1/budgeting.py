@@ -1,8 +1,7 @@
-"""Thesis cost-penalized GRPO reward.
+"""Thesis cost-penalized GRPO reward, single source of truth.
 
-Implements ``R = R_answer - alpha*N - beta*T - gamma*max(0, k-N)``.
-Single source of truth for alpha/beta/gamma. The trainer pulls
-coefficients from Hydra and calls in. Math is not duplicated.
+R = R_answer + lam*G - alpha*N - beta*T - gamma*max(0, k-N)
+- delta*max(0, gold_k-k), G is gold-passage grounding recall.
 """
 
 import re
@@ -11,14 +10,55 @@ from typing import Optional, Sequence
 
 
 _BUDGET_PATTERN = re.compile(r"^\s*<budget>\s*(\d+)\s*</budget>\s*", re.DOTALL)
+_TITLE_PATTERN = re.compile(r"Doc\s+\d+\(Title:\s*(.*?)\)")
+_WHITESPACE = re.compile(r"\s+")
+
+
+def normalize_title(title: str) -> str:
+    """Lowercase and collapse whitespace for lenient title matching."""
+    return _WHITESPACE.sub(" ", title.lower()).strip()
+
+
+def title_recall(
+    retrieved_titles: Sequence[str], gold_titles: Sequence[str]
+) -> float:
+    """Return the fraction of gold titles matched in retrieved titles.
+
+    Matches on equality or substring either way after normalization.
+    """
+    if not gold_titles:
+        return 0.0
+    retrieved_norm = [normalize_title(t) for t in retrieved_titles if t]
+    hits = 0
+    for gold in gold_titles:
+        gold_norm = normalize_title(gold)
+        if any(
+            gold_norm == r or gold_norm in r or r in gold_norm
+            for r in retrieved_norm
+        ):
+            hits += 1
+    return hits / len(gold_titles)
+
+
+def parse_retrieved_titles(text: str) -> list[str]:
+    """Return titles from the ``Doc i(Title: ...)`` blocks in ``text``."""
+    return [m.strip() for m in _TITLE_PATTERN.findall(text or "")]
+
+
+def compute_grounding_reward(
+    retrieved_titles: Sequence[str],
+    gold_titles: Sequence[str],
+    lam: float,
+) -> float:
+    """Return ``lam * gold-passage recall``, decoupled from the answer."""
+    return lam * title_recall(retrieved_titles, gold_titles)
 
 
 @dataclass(frozen=True)
 class BudgetRewardConfig:
-    """Frozen alpha/beta/gamma, ``gamma < alpha`` enforced at config layer.
+    """Frozen reward coefficients, ``gamma < alpha`` enforced upstream.
 
-    ``delta`` weights the declaration floor (under-declaration penalty
-    toward ``gold_budget``); default 0 keeps the baseline reward intact.
+    delta weights the under-declaration floor, default 0 is baseline.
     """
 
     alpha: float = 0.05
@@ -107,12 +147,12 @@ def compute_budget_reward(
     declared_budget: int,
     config: BudgetRewardConfig,
     gold_budget: Optional[int] = None,
+    grounding_reward: float = 0.0,
 ) -> tuple[float, dict[str, float]]:
     """Return ``(score, parts)`` for one rollout.
 
-    ``parts`` carries each penalty component for logging. The
-    declaration floor only bites when ``gold_budget`` is given and the
-    declaration falls below it, resisting the k=1 escape hatch.
+    parts carries each component for logging. The declaration floor
+    applies only when gold_budget is given.
     """
     total_tokens = generated_tokens + retrieved_tokens
     retrieval_penalty = config.alpha * valid_search_calls
@@ -127,6 +167,7 @@ def compute_budget_reward(
         )
     score = (
         answer_score
+        + grounding_reward
         - retrieval_penalty
         - token_penalty
         - unused_budget_penalty
@@ -135,6 +176,7 @@ def compute_budget_reward(
 
     return score, {
         "answer": answer_score,
+        "grounding_reward": grounding_reward,
         "retrieval_penalty": retrieval_penalty,
         "token_penalty": token_penalty,
         "unused_budget_penalty": unused_budget_penalty,
