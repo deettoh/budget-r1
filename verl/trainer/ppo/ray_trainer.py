@@ -702,8 +702,10 @@ class RayPPOTrainer(object):
                             "retrieved_tokens": [],
                             "has_answer": [],
                             "declared_budget": [],
+                            "gold_recall": [],
                         },
                     )
+                    bucket["gold_recall"].append(entry.get("gold_recall", 0.0))
                     bucket["em"].append(entry["em"])
                     bucket["f1"].append(entry["f1"])
                     bucket["mrc"].append(entry["valid_search_calls"])
@@ -735,6 +737,9 @@ class RayPPOTrainer(object):
                 )
                 metric_dict[f"val/has_answer_ratio/{source}"] = float(
                     np.mean(bucket["has_answer"])
+                )
+                metric_dict[f"val/gold_recall/{source}"] = float(
+                    np.mean(bucket["gold_recall"])
                 )
                 if bucket["declared_budget"]:
                     metric_dict[f"val/declared_budget/{source}"] = float(
