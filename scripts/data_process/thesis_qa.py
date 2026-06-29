@@ -158,6 +158,38 @@ def derive_gold_budget(example: dict[str, Any], data_source: str) -> int:
     )
 
 
+def extract_gold_titles(
+    example: dict[str, Any], data_source: str
+) -> list[str]:
+    """Return distinct gold supporting-passage titles, sorted.
+
+    Reuses the title parser plus MuSiQue paragraphs, empty when none.
+    """
+    metadata = example.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+
+    supporting_facts = example.get("supporting_facts") or metadata.get(
+        "supporting_facts"
+    )
+    titles = _titles_from_supporting_facts(supporting_facts)
+
+    paragraphs = (
+        example.get("paragraphs")
+        or example.get("supporting_paragraphs")
+        or metadata.get("paragraphs")
+        or metadata.get("supporting_paragraphs")
+    )
+    for paragraph in _as_list(paragraphs):
+        if (
+            isinstance(paragraph, dict)
+            and paragraph.get("is_supporting")
+            and paragraph.get("title")
+        ):
+            titles.add(str(paragraph["title"]))
+
+    return sorted(titles)
+
+
 def make_rl_record(
     example: dict[str, Any],
     idx: int,
