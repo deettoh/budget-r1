@@ -191,6 +191,8 @@ cost_reward:
   gamma: 0.01
   # declaration floor: -delta*max(0, gold_budget - declared); off by 0
   delta: 0.0
+  # answer reward metric: em (baseline parity) | f1 | em_f1
+  answer_metric: em
   max_budget: ${budget_planner.max_budget}
 
 algorithm:
