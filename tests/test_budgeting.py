@@ -9,6 +9,7 @@ from search_r1.budgeting import (
     compute_budget_reward,
     curriculum_gamma,
     parse_budget_declaration,
+    select_answer_reward,
     should_force_search,
 )
 
@@ -80,6 +81,28 @@ class CurriculumGammaTest(unittest.TestCase):
 
     def test_gamma_zeroed_while_forcing(self):
         self.assertEqual(curriculum_gamma(0.01, True), 0.0)
+
+
+class AnswerRewardTest(unittest.TestCase):
+    def test_em_metric_returns_binary_em(self):
+        self.assertEqual(select_answer_reward(1.0, 0.5, "em"), 1.0)
+        self.assertEqual(select_answer_reward(0.0, 0.7, "em"), 0.0)
+
+    def test_f1_metric_returns_f1(self):
+        self.assertEqual(select_answer_reward(0.0, 0.7, "f1"), 0.7)
+        self.assertEqual(select_answer_reward(1.0, 1.0, "f1"), 1.0)
+
+    def test_em_f1_metric_averages(self):
+        self.assertTrue(
+            math.isclose(select_answer_reward(0.0, 0.6, "em_f1"), 0.3)
+        )
+        self.assertTrue(
+            math.isclose(select_answer_reward(1.0, 1.0, "em_f1"), 1.0)
+        )
+
+    def test_unknown_metric_raises(self):
+        with self.assertRaises(ValueError):
+            select_answer_reward(1.0, 1.0, "bleu")
 
 
 class DeclarationFloorTest(unittest.TestCase):

@@ -63,6 +63,20 @@ def build_budget_mask(
     return mask
 
 
+def select_answer_reward(em: float, f1: float, metric: str = "em") -> float:
+    """Return the answer reward under metric em, f1, or em_f1.
+
+    em is baseline parity, f1 credits partial gains, em_f1 averages.
+    """
+    if metric == "em":
+        return float(em)
+    if metric == "f1":
+        return float(f1)
+    if metric == "em_f1":
+        return 0.5 * float(em) + 0.5 * float(f1)
+    raise ValueError(f"unknown answer_metric: {metric!r}")
+
+
 def should_force_search(
     declared_budget: int, search_count: int, force_active: bool
 ) -> bool:

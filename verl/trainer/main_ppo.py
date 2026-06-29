@@ -26,6 +26,7 @@ from search_r1.budgeting import (
     BudgetRewardConfig,
     compute_budget_reward,
     curriculum_gamma,
+    select_answer_reward,
 )
 
 
@@ -105,6 +106,16 @@ class RewardManager:
         if isinstance(extra, dict) and extra.get("gold_budget") is not None:
             return int(extra["gold_budget"])
         return None
+
+    def _cost_answer_reward(self, em_answer_score, qa):
+        """Return the answer reward under cost_reward.answer_metric.
+
+        em keeps baseline parity, f1 and em_f1 credit partial answers.
+        """
+        metric = self.cost_reward_config.get("answer_metric", "em")
+        if metric == "em":
+            return em_answer_score
+        return select_answer_reward(qa["em"], qa["f1"], metric)
 
     def _scalar_batch_value(self, data_item, key, default):
         """Return scalar at ``data_item.batch[key]`` or ``default``."""
@@ -187,8 +198,9 @@ class RewardManager:
                 effective_budget = declared_budget
                 if effective_budget < 0:
                     effective_budget = int(self.cost_reward_config.get("max_budget", 5))
+                answer_reward = self._cost_answer_reward(answer_score, qa)
                 score, _ = compute_budget_reward(
-                    answer_score=answer_score,
+                    answer_score=answer_reward,
                     valid_search_calls=valid_search_calls,
                     generated_tokens=generated_tokens,
                     retrieved_tokens=retrieved_tokens,
@@ -197,6 +209,7 @@ class RewardManager:
                     gold_budget=self._gold_budget(data_item),
                 )
             else:
+                answer_reward = answer_score
                 score = answer_score
 
             reward_tensor[i, valid_response_length - 1] = score
@@ -213,6 +226,7 @@ class RewardManager:
                     "declared_budget": int(declared_budget),
                     "reward": float(score),
                     "answer_score": float(answer_score),
+                    "answer_reward": float(answer_reward),
                 }
             )
 
