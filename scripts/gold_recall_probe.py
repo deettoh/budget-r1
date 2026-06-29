@@ -1,19 +1,9 @@
-"""Gold-passage recall probe (offline retriever attribution).
+"""Gold-passage recall probe, offline retriever attribution.
 
-Attributes the k=1 budget collapse to a retriever vs generation limit
-by measuring how often the gold supporting passages are retrievable.
-
-Two tiers per question (recall@topk of gold supporting titles):
-  A (oracle): query the index with each gold title's own text -> is
-     that passage retrievable at all? (corpus/index coverage)
-  B (question): query the index with the question -> single-shot recall.
-
-Decision rule:
-  A low            -> corpus/index-limited (no reward can fix it)
-  A high, B low    -> query/multi-hop-reasoning-limited
-  A high, B high   -> generation-limited (evidence is there, unused)
-
-No training and no model rollout: a retriever + index pass only.
+Measures gold recall@k under an oracle query (tier A, is the passage
+reachable) and the question (tier B), swept over --topks. Low A means
+corpus-limited, high A low B query-limited, both high generation-limited.
+Retriever and index pass only, no training or rollout.
 """
 
 import argparse
@@ -31,6 +21,7 @@ sys.path.insert(
 import thesis_qa  # noqa: E402
 
 extract_gold_titles = thesis_qa.extract_gold_titles
+extract_gold_passages = thesis_qa.extract_gold_passages
 load_named_dataset = thesis_qa.load_named_dataset
 normalize_question = thesis_qa.normalize_question
 
@@ -67,6 +58,48 @@ def recall_at_k(retrieved_titles, gold_titles) -> float:
     return hits / len(gold_titles)
 
 
+def mean_recall_by_k(
+    retrieved_lists: list[list[str]],
+    gold_lists: list[list[str]],
+    topks: list[int],
+) -> dict[int, float]:
+    """Return ``{k: mean recall@k}`` over aligned retrieved/gold lists."""
+    result: dict[int, float] = {}
+    for k in topks:
+        if not gold_lists:
+            result[k] = 0.0
+            continue
+        per = [
+            recall_at_k(retrieved[:k], gold)
+            for retrieved, gold in zip(retrieved_lists, gold_lists)
+        ]
+        result[k] = sum(per) / len(per)
+    return result
+
+
+def _oracle_recall_at_k(
+    owner: list[tuple[int, str]],
+    oracle_titles: list[list[str]],
+    num_examples: int,
+    k: int,
+) -> float:
+    """Return mean per-example oracle recall@k.
+
+    Each oracle query targets one gold title; per example = fraction of
+    its gold passages whose title is in that query's top-k retrieved.
+    """
+    hits = [0] * num_examples
+    total = [0] * num_examples
+    for (idx, gold), retrieved in zip(owner, oracle_titles):
+        total[idx] += 1
+        if recall_at_k(retrieved[:k], [gold]) > 0:
+            hits[idx] += 1
+    per = [
+        hits[i] / total[i] for i in range(num_examples) if total[i]
+    ]
+    return sum(per) / len(per) if per else 0.0
+
+
 def _collect_examples(data_source: str, split: str, num: int) -> list[dict]:
     """Return up to ``num`` examples that carry gold titles."""
     dataset = load_named_dataset(data_source)
@@ -86,6 +119,9 @@ def _collect_examples(data_source: str, split: str, num: int) -> list[dict]:
                     str(example.get("question", ""))
                 ),
                 "gold_titles": titles,
+                "gold_passages": extract_gold_passages(
+                    example, data_source
+                ),
             }
         )
         if len(collected) >= num:
@@ -93,13 +129,13 @@ def _collect_examples(data_source: str, split: str, num: int) -> list[dict]:
     return collected
 
 
-def _build_retriever(args):
+def _build_retriever(args, retrieval_topk: int):
     """Return a local FlashRAG retriever (mirrors the rollout config)."""
     from search_r1.search.retrieval_server import Config, get_retriever
 
     config = Config(
         retrieval_method=args.retriever_name,
-        retrieval_topk=args.topk,
+        retrieval_topk=retrieval_topk,
         index_path=args.index_path,
         corpus_path=args.corpus_path,
         faiss_gpu=args.faiss_gpu,
@@ -123,39 +159,49 @@ def _retrieve_titles(retriever, queries, topk) -> list[list[str]]:
     ]
 
 
-def _probe_dataset(retriever, examples, topk) -> dict:
-    """Return mean Tier-A and Tier-B recall over ``examples``."""
-    questions = [ex["question"] for ex in examples]
-    question_titles = _retrieve_titles(retriever, questions, topk)
-    tier_b = [
-        recall_at_k(retrieved, ex["gold_titles"])
-        for ex, retrieved in zip(examples, question_titles)
-    ]
+def _oracle_queries(examples, oracle_query):
+    """Return (query_text, owner) pairs for the Tier-A oracle probe.
 
-    oracle_queries, owner = [], []
+    ``passage`` queries with the gold passage body, ``title`` with the
+    gold title; both check whether the gold title is retrieved.
+    """
+    queries, owner = [], []
     for i, ex in enumerate(examples):
-        for gold in ex["gold_titles"]:
-            oracle_queries.append(gold)
-            owner.append((i, gold))
-    oracle_titles = _retrieve_titles(retriever, oracle_queries, topk)
-    oracle_hits = [0] * len(examples)
-    oracle_total = [0] * len(examples)
-    for (idx, gold), retrieved in zip(owner, oracle_titles):
-        oracle_total[idx] += 1
-        if recall_at_k(retrieved, [gold]) > 0:
-            oracle_hits[idx] += 1
-    tier_a = [
-        oracle_hits[i] / oracle_total[i]
-        for i in range(len(examples))
-        if oracle_total[i]
-    ]
+        if oracle_query == "passage":
+            for title, body in ex["gold_passages"]:
+                queries.append(body)
+                owner.append((i, title))
+        else:
+            for title in ex["gold_titles"]:
+                queries.append(title)
+                owner.append((i, title))
+    return queries, owner
+
+
+def _probe_dataset(retriever, examples, topks, oracle_query) -> dict:
+    """Return Tier-A and Tier-B recall@k sweeps over ``examples``."""
+    max_k = max(topks)
+    questions = [ex["question"] for ex in examples]
+    question_titles = _retrieve_titles(retriever, questions, max_k)
+    gold_lists = [ex["gold_titles"] for ex in examples]
+    tier_b = mean_recall_by_k(question_titles, gold_lists, topks)
+
+    queries, owner = _oracle_queries(examples, oracle_query)
+    oracle_titles = (
+        _retrieve_titles(retriever, queries, max_k) if queries else []
+    )
+    tier_a = {
+        k: _oracle_recall_at_k(owner, oracle_titles, len(examples), k)
+        for k in topks
+    }
 
     return {
         "n": len(examples),
-        "tier_a_oracle_recall": sum(tier_a) / len(tier_a) if tier_a else 0.0,
-        "tier_b_question_recall": (
-            sum(tier_b) / len(tier_b) if tier_b else 0.0
-        ),
+        "n_oracle_queries": len(queries),
+        "oracle_query": oracle_query,
+        "topks": list(topks),
+        "tier_a_oracle_recall": tier_a,
+        "tier_b_question_recall": tier_b,
     }
 
 
@@ -166,7 +212,10 @@ def main() -> None:
     )
     parser.add_argument("--split", default="dev")
     parser.add_argument("--num", type=int, default=200)
-    parser.add_argument("--topk", type=int, default=3)
+    parser.add_argument("--topks", default="3")
+    parser.add_argument(
+        "--oracle_query", default="title", choices=["title", "passage"]
+    )
     parser.add_argument("--index_path", default="retrieval_data/e5_IVF.index")
     parser.add_argument("--corpus_path", default="retrieval_data/wiki-18.jsonl")
     parser.add_argument("--retriever_name", default="e5")
@@ -176,17 +225,27 @@ def main() -> None:
     parser.add_argument("--out", default="outputs/gold_recall_probe.json")
     args = parser.parse_args()
 
-    retriever = _build_retriever(args)
+    topks = sorted({int(x) for x in args.topks.split(",") if x.strip()})
+    if not topks or topks[0] < 1:
+        parser.error("--topks must list positive integers, e.g. 3,5,10,20")
+
+    retriever = _build_retriever(args, max(topks))
     report = {}
     for raw_source in args.data_sources.split(","):
         data_source = raw_source.strip()
         examples = _collect_examples(data_source, args.split, args.num)
-        row = _probe_dataset(retriever, examples, args.topk)
+        row = _probe_dataset(retriever, examples, topks, args.oracle_query)
         report[data_source] = row
+        sweep_a = " ".join(
+            f"@{k}={row['tier_a_oracle_recall'][k]:.3f}" for k in topks
+        )
+        sweep_b = " ".join(
+            f"@{k}={row['tier_b_question_recall'][k]:.3f}" for k in topks
+        )
         print(
             f"{data_source}: n={row['n']} "
-            f"tierA(oracle)={row['tier_a_oracle_recall']:.3f} "
-            f"tierB(question)={row['tier_b_question_recall']:.3f}"
+            f"oracle={args.oracle_query}({row['n_oracle_queries']}) "
+            f"tierA[{sweep_a}] tierB[{sweep_b}]"
         )
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)

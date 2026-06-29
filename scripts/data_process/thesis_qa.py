@@ -190,6 +190,87 @@ def extract_gold_titles(
     return sorted(titles)
 
 
+def _join_sentences(value: Any) -> str:
+    """Join a sentence group (list or string) into one body string."""
+    if isinstance(value, str):
+        return value.strip()
+    return " ".join(str(s) for s in _as_list(value)).strip()
+
+
+def _context_title_to_body(context: Any) -> dict[str, str]:
+    """Map passage title -> joined body text from a context field.
+
+    Handles the columnar-dict and list-of-pairs/dict forms.
+    """
+    bodies: dict[str, str] = {}
+    if isinstance(context, dict):
+        sentences = (
+            context.get("content")
+            or context.get("sentences")
+            or context.get("text")
+        )
+        for title, group in zip(
+            _as_list(context.get("title")), _as_list(sentences)
+        ):
+            bodies[str(title)] = _join_sentences(group)
+    elif isinstance(context, (list, tuple)):
+        for item in context:
+            if isinstance(item, dict) and item.get("title") is not None:
+                body = (
+                    item.get("sentences")
+                    or item.get("content")
+                    or item.get("text")
+                    or item.get("paragraph_text")
+                )
+                bodies[str(item["title"])] = _join_sentences(body)
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                bodies[str(item[0])] = _join_sentences(item[1])
+    return bodies
+
+
+def extract_gold_passages(
+    example: dict[str, Any], data_source: str
+) -> list[tuple[str, str]]:
+    """Return ``(title, body)`` for each gold supporting passage.
+
+    Body is the passage text for the recall-probe oracle query.
+    Passages whose body cannot be recovered are skipped.
+    """
+    gold_titles = set(extract_gold_titles(example, data_source))
+    if not gold_titles:
+        return []
+
+    metadata = example.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+
+    bodies: dict[str, str] = {}
+    paragraphs = (
+        example.get("paragraphs")
+        or example.get("supporting_paragraphs")
+        or metadata.get("paragraphs")
+        or metadata.get("supporting_paragraphs")
+    )
+    for paragraph in _as_list(paragraphs):
+        if (
+            isinstance(paragraph, dict)
+            and paragraph.get("title") in gold_titles
+        ):
+            body = _join_sentences(
+                paragraph.get("paragraph_text")
+                or paragraph.get("text")
+                or paragraph.get("sentences")
+            )
+            if body:
+                bodies.setdefault(str(paragraph["title"]), body)
+
+    context = example.get("context") or metadata.get("context")
+    for title, body in _context_title_to_body(context).items():
+        if title in gold_titles and body:
+            bodies.setdefault(title, body)
+
+    return [(title, bodies[title]) for title in sorted(bodies)]
+
+
 def make_rl_record(
     example: dict[str, Any],
     idx: int,
