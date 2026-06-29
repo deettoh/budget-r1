@@ -15,4 +15,4 @@
 mkdir -p logs
 mkdir -p outputs
 
-python -m scripts.gold_recall_probe --num 200 --topk 3 --index_path retrieval_data/e5_IVF.index --corpus_path retrieval_data/wiki-18.jsonl --retriever_name e5 --retriever_model intfloat/e5-base-v2 --out outputs/gold_recall_probe.json
+python scripts/gold_recall_probe.py --num 200 --topk 3 --index_path retrieval_data/e5_IVF.index --corpus_path retrieval_data/wiki-18.jsonl --retriever_name e5 --retriever_model intfloat/e5-base-v2 --out outputs/gold_recall_probe.json

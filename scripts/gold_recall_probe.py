@@ -20,8 +20,15 @@ import argparse
 import json
 import os
 import re
+import sys
 
-from scripts.data_process.thesis_qa import (
+# allow `python scripts/gold_recall_probe.py` from the repo root by
+# putting the repo root (parent of scripts/) on the path
+sys.path.insert(
+    0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+
+from scripts.data_process.thesis_qa import (  # noqa: E402
     extract_gold_titles,
     load_named_dataset,
     normalize_question,
