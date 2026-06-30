@@ -561,6 +561,9 @@ class RayPPOTrainer(object):
             faiss_nprobe=self.config.retriever.get('faiss_nprobe', None),
             enable_budget_planner=self.config.budget_planner.enabled,
             max_budget=self.config.budget_planner.max_budget,
+            min_searches=self.config.budget_planner.get(
+                "forced_exec", {}
+            ).get("min_searches", 0),
         )
 
         # Agent config preparation
@@ -1013,6 +1016,9 @@ class RayPPOTrainer(object):
             faiss_nprobe=self.config.retriever.get('faiss_nprobe', None),
             enable_budget_planner=self.config.budget_planner.enabled,
             max_budget=self.config.budget_planner.max_budget,
+            min_searches=self.config.budget_planner.get(
+                "forced_exec", {}
+            ).get("min_searches", 0),
         )
 
         generation_manager = LLMGenerationManager(

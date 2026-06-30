@@ -183,6 +183,9 @@ budget_planner:
   forced_exec:
     enabled: false
     until_step: 0
+    # force >= min_searches executed hops during bootstrap (raises the
+    # effective cap above declared so multi-hop is explored); 0 = off
+    min_searches: 0
 
 cost_reward:
   enabled: false

@@ -35,6 +35,7 @@ class GenerationConfig:
     faiss_nprobe: int = None
     enable_budget_planner: bool = False
     max_budget: int = 5
+    min_searches: int = 0
 
 class LLMGenerationManager:
     def __init__(
@@ -273,8 +274,7 @@ class LLMGenerationManager:
             rollings_active = DataProto.from_dict({
                 k: v[active_mask] for k, v in rollings.batch.items()
             })            
-            # re-attach meta_info dropped by from_dict so do_sample /
-            # recompute_log_prob reach generate_sequences
+            # re-attach meta_info from_dict drops for do_sample
             rollings_active.meta_info = rollings.meta_info
             gen_output = self._generate_with_gpu_padding(rollings_active)
 
@@ -325,8 +325,7 @@ class LLMGenerationManager:
             rollings_active = DataProto.from_dict({
                 k: v[active_mask] for k, v in rollings.batch.items()
             })            
-            # re-attach meta_info dropped by from_dict so do_sample /
-            # recompute_log_prob reach generate_sequences
+            # re-attach meta_info from_dict drops for do_sample
             rollings_active.meta_info = rollings.meta_info
             gen_output = self._generate_with_gpu_padding(rollings_active)
 
@@ -405,8 +404,7 @@ class LLMGenerationManager:
         if rollout_stats is not None:
             final_output.update(rollout_stats)
 
-        # budget_mask rides the DataProto tensor parallel to info_mask so
-        # it survives slicing + _balance_batch reorder for D/E downstream
+        # budget_mask rides the DataProto tensor to survive the reorder
         if self.config.enable_budget_planner and rollout_stats is not None:
             final_output['budget_mask'] = self._build_budget_mask_tensor(
                 left_side['input_ids'],
@@ -475,12 +473,19 @@ class LLMGenerationManager:
         if blocked_search_counts is None:
             blocked_search_counts = [0 for _ in predictions]
 
+        def _effective_cap(idx):
+            # forcing raises the cap to the min-search floor, else declared
+            declared = declared_budgets[idx]
+            if force_search_active and declared >= 0:
+                return max(declared, self.config.min_searches)
+            return declared
+
         search_queries = []
         if do_search:
             for i, (action, content) in enumerate(zip(cur_actions, contents)):
                 if action != 'search':
                     continue
-                if self.config.enable_budget_planner and declared_budgets[i] >= 0 and search_counts[i] >= declared_budgets[i]:
+                if self.config.enable_budget_planner and declared_budgets[i] >= 0 and search_counts[i] >= _effective_cap(i):
                     continue
                 if self.config.enable_budget_planner and declared_budgets[i] < 0:
                     continue
@@ -536,10 +541,10 @@ class LLMGenerationManager:
                             declared_budgets[i],
                             search_counts[i],
                             force_search_active,
+                            self.config.min_searches,
                         )
                     ):
-                        # bootstrap, block early answer so declared k
-                        # binds the cap and reopens the k->N gradient
+                        # bootstrap, block early answer so declared k binds the cap
                         next_obs.append(
                             '\nThe declared retrieval budget has not been '
                             'used yet. I should search before answering.\n'
@@ -558,7 +563,7 @@ class LLMGenerationManager:
                         dones.append(0)
                         valid_action.append(0)
                         is_search.append(0)
-                    elif self.config.enable_budget_planner and search_counts[i] >= declared_budgets[i]:
+                    elif self.config.enable_budget_planner and search_counts[i] >= _effective_cap(i):
                         blocked_search_counts[i] += 1
                         next_obs.append('\nThe declared retrieval budget is exhausted. I must answer using the evidence already available.\n')
                         dones.append(0)
@@ -660,8 +665,7 @@ If I want to give the final answer, I should put the answer between <answer> and
             faiss_gpu=self.config.faiss_gpu,
             retrieval_model_path=self.config.retriever_model,
             retrieval_pooling_method="mean",
-            # cap query encode at 64 the untrained policy emits ~256-tok
-            # <search> strings that dominate rollout retrieval time
+            # cap query encode at 64, untrained policy emits huge queries
             retrieval_query_max_length=64,
             retrieval_use_fp16=True,
             retrieval_batch_size=self.config.retrieval_batch_size,
