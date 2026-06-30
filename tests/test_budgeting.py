@@ -201,6 +201,26 @@ class BuildBudgetMaskTest(unittest.TestCase):
         self.assertEqual(build_budget_mask([1, 2, 3], []), [0, 0, 0])
 
 
+class MinSearchFloorTest(unittest.TestCase):
+    def test_floor_forces_beyond_declared(self):
+        # declared 1, used 1: no force normally, but a floor of 2 forces
+        self.assertFalse(should_force_search(1, 1, True))
+        self.assertTrue(should_force_search(1, 1, True, min_searches=2))
+
+    def test_floor_forces_even_when_declared_zero(self):
+        self.assertTrue(should_force_search(0, 0, True, min_searches=2))
+
+    def test_floor_stops_once_reached(self):
+        self.assertFalse(should_force_search(1, 2, True, min_searches=2))
+
+    def test_no_force_when_inactive(self):
+        self.assertFalse(should_force_search(1, 0, False, min_searches=2))
+
+    def test_default_floor_preserves_declared_behavior(self):
+        self.assertTrue(should_force_search(3, 1, True))
+        self.assertFalse(should_force_search(0, 0, True))
+
+
 class GroundingRewardTest(unittest.TestCase):
     def test_normalize_title_lowers_and_collapses_space(self):
         self.assertEqual(normalize_title("  The   Movie "), "the movie")

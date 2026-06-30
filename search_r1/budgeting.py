@@ -118,17 +118,17 @@ def select_answer_reward(em: float, f1: float, metric: str = "em") -> float:
 
 
 def should_force_search(
-    declared_budget: int, search_count: int, force_active: bool
+    declared_budget: int,
+    search_count: int,
+    force_active: bool,
+    min_searches: int = 0,
 ) -> bool:
     """Return True if an early answer must be blocked to force search.
 
-    Bootstrap-only scaffolding for the budget planner: while forcing is
-    active, a sample that declared ``k >= 1`` may not answer until it has
-    used its declared calls, so declaring k binds the cap and reopens the
-    k->N->R_answer gradient. Pure and config-free; callers gate it on
-    ``enable_budget_planner`` and the train-vs-eval split.
+    Bootstrap scaffolding. Force target is max(declared, min_searches).
     """
-    return force_active and declared_budget >= 1 and search_count < declared_budget
+    target = max(declared_budget if declared_budget >= 0 else 0, min_searches)
+    return force_active and target >= 1 and search_count < target
 
 
 def curriculum_gamma(base_gamma: float, force_active: bool) -> float:
