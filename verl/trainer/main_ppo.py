@@ -121,6 +121,11 @@ class RewardManager:
         grounding = (self.cost_reward_config or {}).get("grounding")
         return bool(grounding is not None and grounding.get("enabled", False))
 
+    def _cost_in_advantage(self) -> float:
+        """Return the group-normalized cost coeff (option a), else 0."""
+        cfg = self.cost_reward_config or {}
+        return float(cfg.get("cost_in_advantage", 0.0))
+
     def _retrieved_text(
         self, data_item, prompt_length, valid_response_ids,
         valid_response_length, fallback,
@@ -243,16 +248,21 @@ class RewardManager:
                     grounding_reward = float(
                         self.cost_reward_config["grounding"].get("lam", 0.0)
                     ) * gold_recall
-                score, _ = compute_budget_reward(
-                    answer_score=answer_reward,
-                    valid_search_calls=valid_search_calls,
-                    generated_tokens=generated_tokens,
-                    retrieved_tokens=retrieved_tokens,
-                    declared_budget=effective_budget,
-                    config=self._budget_reward_config(force_active),
-                    gold_budget=self._gold_budget(data_item),
-                    grounding_reward=grounding_reward,
-                )
+                if self._cost_in_advantage() > 0:
+                    # option a cost lives in the advantage z-score
+                    # so the reward keeps only answer + grounding upside
+                    score = answer_reward + grounding_reward
+                else:
+                    score, _ = compute_budget_reward(
+                        answer_score=answer_reward,
+                        valid_search_calls=valid_search_calls,
+                        generated_tokens=generated_tokens,
+                        retrieved_tokens=retrieved_tokens,
+                        declared_budget=effective_budget,
+                        config=self._budget_reward_config(force_active),
+                        gold_budget=self._gold_budget(data_item),
+                        grounding_reward=grounding_reward,
+                    )
             else:
                 answer_reward = answer_score
                 score = answer_score

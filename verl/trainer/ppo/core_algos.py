@@ -108,19 +108,48 @@ def compute_gae_advantage_return(token_level_rewards: torch.Tensor, values: torc
 
 
 # NOTE(sgm): this implementation only consider outcome supervision, where the reward is a scalar.
+def _group_zscore(values, index, epsilon):
+    """Return per-sample within-group z-scores.
+
+    Mirrors GRPO's own score normalization so the cost term is scaled
+    identically. Singleton groups get z=0.
+    """
+    id2vals = defaultdict(list)
+    for i in range(values.shape[0]):
+        id2vals[index[i]].append(values[i])
+    id2mean, id2std = {}, {}
+    for idx in id2vals:
+        if len(id2vals[idx]) == 1:
+            id2mean[idx] = torch.tensor(0.0)
+            id2std[idx] = torch.tensor(1.0)
+        else:
+            id2mean[idx] = torch.mean(torch.tensor(id2vals[idx]))
+            id2std[idx] = torch.std(torch.tensor([id2vals[idx]]))
+    out = values.clone()
+    for i in range(values.shape[0]):
+        out[i] = (values[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
+    return out
+
+
 def compute_grpo_outcome_advantage(token_level_rewards: torch.Tensor,
                                    eos_mask: torch.Tensor,
                                    index: torch.Tensor,
-                                   epsilon: float = 1e-6):
+                                   epsilon: float = 1e-6,
+                                   cost: torch.Tensor = None,
+                                   cost_coeff: float = 0.0):
     """
-    Compute advantage for GRPO, operating only on Outcome reward 
+    Compute advantage for GRPO, operating only on Outcome reward
     (with only one scalar reward for each response).
     Args:
         token_level_rewards: `(torch.Tensor)`
             shape: (bs, response_length)
         eos_mask: `(torch.Tensor)`
             shape: (bs, response_length)
-    
+        cost: optional per-sample scalar cost (e.g. retrieval calls).
+            With ``cost_coeff`` > 0 its within-group z-score is
+            subtracted from the advantage. Default off, baseline
+            byte-identical.
+
     Returns:
         advantages: `(torch.Tensor)`
             shape: (bs, response_length)
@@ -150,6 +179,9 @@ def compute_grpo_outcome_advantage(token_level_rewards: torch.Tensor,
                 raise ValueError(f"no score in prompt index: {idx}")
         for i in range(bsz):
             scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
+        if cost is not None and cost_coeff > 0:
+            cost_z = _group_zscore(cost.float(), index, epsilon)
+            scores = scores - cost_coeff * cost_z
         scores = scores.unsqueeze(-1).tile([1, response_length]) * eos_mask
 
     return scores, scores

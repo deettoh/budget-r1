@@ -149,7 +149,8 @@ def apply_kl_penalty(
     return data, metrics
 
 
-def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1):
+def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0,
+                      num_repeat=1, cost_coeff=0.0):
     # prepare response group
     # TODO: add other ways to estimate advantages
     if adv_estimator == "gae":
@@ -175,8 +176,15 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         response_length = responses.size(-1)
         attention_mask = data.batch["attention_mask"]
         response_mask = attention_mask[:, -response_length:]
+        # option (a) group-normalized cost in the advantage
+        # only when coeff>0 and the rollout emitted call counts
+        cost = None
+        if cost_coeff > 0 and "valid_search_count" in data.batch:
+            cost = data.batch["valid_search_count"]
         advantages, returns = core_algos.compute_grpo_outcome_advantage(
-            token_level_rewards=token_level_rewards, eos_mask=response_mask, index=index
+            token_level_rewards=token_level_rewards,
+            eos_mask=response_mask, index=index,
+            cost=cost, cost_coeff=cost_coeff
         )
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
@@ -1195,6 +1203,8 @@ class RayPPOTrainer(object):
                             gamma=self.config.algorithm.gamma,
                             lam=self.config.algorithm.lam,
                             num_repeat=self.config.actor_rollout_ref.rollout.n,
+                            cost_coeff=self.config.cost_reward.get(
+                                "cost_in_advantage", 0.0),
                         )
 
                     # update critic
