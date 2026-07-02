@@ -21,6 +21,7 @@ from verl.utils.reward_score import qa_em
 from verl.utils.reward_score import qa_metrics
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 import re
+from dataclasses import replace
 import numpy as np
 from search_r1.budgeting import (
     BudgetRewardConfig,
@@ -73,10 +74,9 @@ class RewardManager:
     def _budget_reward_config(
         self, force_active: bool = False
     ) -> BudgetRewardConfig:
-        """Build the frozen alpha/beta/gamma config from Hydra.
+        """Build the frozen reward config from Hydra.
 
-        ``force_active`` zeroes gamma during bootstrap forced execution
-        (the gamma-curriculum); default keeps the base coefficient.
+        force_active zeroes gamma during forcing, else base coefficient.
         """
         return BudgetRewardConfig(
             alpha=float(self.cost_reward_config.get("alpha", 0.05)),
@@ -85,6 +85,7 @@ class RewardManager:
                 float(self.cost_reward_config.get("gamma", 0.01)),
                 force_active,
             ),
+            delta=float(self.cost_reward_config.get("delta", 0.0)),
         )
 
     def _token_costs(self, data_item, prompt_length) -> tuple[int, int]:
@@ -250,19 +251,24 @@ class RewardManager:
                     ) * gold_recall
                 if self._cost_in_advantage() > 0:
                     # option a cost lives in the advantage z-score
-                    # so the reward keeps only answer + grounding upside
-                    score = answer_reward + grounding_reward
-                else:
-                    score, _ = compute_budget_reward(
-                        answer_score=answer_reward,
-                        valid_search_calls=valid_search_calls,
-                        generated_tokens=generated_tokens,
-                        retrieved_tokens=retrieved_tokens,
-                        declared_budget=effective_budget,
-                        config=self._budget_reward_config(force_active),
-                        gold_budget=self._gold_budget(data_item),
-                        grounding_reward=grounding_reward,
+                    # alpha/beta zeroed, gamma/delta couplings kept
+                    cost_cfg = replace(
+                        self._budget_reward_config(force_active),
+                        alpha=0.0,
+                        beta=0.0,
                     )
+                else:
+                    cost_cfg = self._budget_reward_config(force_active)
+                score, _ = compute_budget_reward(
+                    answer_score=answer_reward,
+                    valid_search_calls=valid_search_calls,
+                    generated_tokens=generated_tokens,
+                    retrieved_tokens=retrieved_tokens,
+                    declared_budget=effective_budget,
+                    config=cost_cfg,
+                    gold_budget=self._gold_budget(data_item),
+                    grounding_reward=grounding_reward,
+                )
             else:
                 answer_reward = answer_score
                 score = answer_score

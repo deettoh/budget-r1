@@ -199,7 +199,9 @@ cost_reward:
   max_budget: ${budget_planner.max_budget}
   # gold-passage grounding: +lam*recall of gold titles; off by 0
   grounding: {enabled: false, lam: 0.0}
-  # option a: subtract coeff*within-group z(cost) from advantage; off by 0
+  # option a: subtract coeff*within-group z(cost) from advantage
+  # (gated on reward>0); reward then zeroes alpha/beta but KEEPS
+  # gamma/delta couplings (v5); off by 0
   cost_in_advantage: 0.0
 
 algorithm:

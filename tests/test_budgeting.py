@@ -303,5 +303,54 @@ class GroundingRewardTest(unittest.TestCase):
         self.assertGreater(worst_correct, best_incorrect)
 
 
+class CostInAdvantageRewardTest(unittest.TestCase):
+    """v5 reward path: alpha/beta zeroed, gamma/delta couplings kept.
+
+    When cost lives in the advantage the reward must charge no
+    absolute retrieval/token cost but keep the planning couplings:
+    gamma (unused budget) and delta (declaration floor toward gold).
+    """
+
+    def test_zeroed_alpha_beta_keeps_gamma_delta_couplings(self):
+        cfg = BudgetRewardConfig(
+            alpha=0.0, beta=0.0, gamma=0.01, delta=0.02
+        )
+        score, parts = compute_budget_reward(
+            answer_score=1.0,
+            valid_search_calls=1,
+            generated_tokens=300,
+            retrieved_tokens=900,
+            declared_budget=4,
+            config=cfg,
+            gold_budget=2,
+            grounding_reward=0.25,
+        )
+        self.assertEqual(parts["retrieval_penalty"], 0.0)
+        self.assertEqual(parts["token_penalty"], 0.0)
+        # gamma*max(0, 4-1) = .03, delta floor idle since declared > gold
+        self.assertTrue(math.isclose(score, 1.0 + 0.25 - 0.03))
+
+    def test_declare_down_escape_costs_more_than_gamma_saves(self):
+        # delta > gamma invariant: dropping declared one unit below
+        # gold saves gamma but pays delta, so net reward falls
+        cfg = BudgetRewardConfig(
+            alpha=0.0, beta=0.0, gamma=0.01, delta=0.02
+        )
+        common = dict(
+            answer_score=0.0,
+            valid_search_calls=1,
+            generated_tokens=100,
+            retrieved_tokens=100,
+            config=cfg,
+            gold_budget=3,
+            grounding_reward=0.0,
+        )
+        at_gold, _ = compute_budget_reward(declared_budget=3, **common)
+        below_gold, _ = compute_budget_reward(
+            declared_budget=2, **common
+        )
+        self.assertGreater(at_gold, below_gold)
+
+
 if __name__ == "__main__":
     unittest.main()
