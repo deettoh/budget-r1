@@ -147,8 +147,8 @@ def compute_grpo_outcome_advantage(token_level_rewards: torch.Tensor,
             shape: (bs, response_length)
         cost: optional per-sample scalar cost (e.g. retrieval calls).
             With ``cost_coeff`` > 0 its within-group z-score is
-            subtracted from the advantage. Default off, baseline
-            byte-identical.
+            subtracted from the advantage, gated to rollouts with
+            nonzero reward. Default off, baseline byte-identical.
 
     Returns:
         advantages: `(torch.Tensor)`
@@ -158,7 +158,8 @@ def compute_grpo_outcome_advantage(token_level_rewards: torch.Tensor,
     """
     response_length = token_level_rewards.shape[-1]
     non_zero_mask = (token_level_rewards != 0)
-    scores = (token_level_rewards * non_zero_mask).sum(dim=-1)
+    raw_scores = (token_level_rewards * non_zero_mask).sum(dim=-1)
+    scores = raw_scores.clone()
 
     id2score = defaultdict(list)
     id2mean = {}
@@ -181,6 +182,8 @@ def compute_grpo_outcome_advantage(token_level_rewards: torch.Tensor,
             scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
         if cost is not None and cost_coeff > 0:
             cost_z = _group_zscore(cost.float(), index, epsilon)
+            # gate cost on reward>0 so all-fail groups give no cheaper-gradient
+            cost_z = cost_z * (raw_scores > 0).to(cost_z.dtype)
             scores = scores - cost_coeff * cost_z
         scores = scores.unsqueeze(-1).tile([1, response_length]) * eos_mask
 

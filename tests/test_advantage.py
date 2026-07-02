@@ -16,7 +16,7 @@ from verl.trainer.ppo.core_algos import (
 
 
 def _rewards_from_scores(scores):
-    """Pack per-sample scalars into a (bs, T) last-token reward tensor."""
+    """Pack per-sample scalars into a last-token reward tensor."""
     bsz = len(scores)
     tensor = torch.zeros(bsz, 3)
     for i, s in enumerate(scores):
@@ -56,8 +56,7 @@ class AdvantageCostTest(unittest.TestCase):
         self.assertTrue(torch.allclose(base, off))
 
     def test_higher_cost_lowers_advantage_within_tied_group(self):
-        # tied answer reward -> score z-score is 0 for both, so only
-        # the cost term separates them (the k=1 fixed-point escape)
+        # tied reward zeroes the score z, so only cost separates them
         rewards = _rewards_from_scores([1.0, 1.0])
         mask = torch.ones(2, 3)
         index = np.array(["q", "q"])
@@ -68,6 +67,36 @@ class AdvantageCostTest(unittest.TestCase):
         cheap = float(adv[0, -1])
         pricey = float(adv[1, -1])
         self.assertGreater(cheap, pricey)
+
+    def test_all_fail_group_gives_zero_cost_gradient(self):
+        # the v4 death spiral, all-zero groups let cheap garbage win
+        rewards = _rewards_from_scores([0.0, 0.0, 0.0])
+        mask = torch.ones(3, 3)
+        index = np.array(["q", "q", "q"])
+        cost = torch.tensor([0.0, 2.0, 5.0])
+        adv, _ = compute_grpo_outcome_advantage(
+            rewards, mask, index, cost=cost, cost_coeff=0.5
+        )
+        self.assertTrue(torch.allclose(adv, torch.zeros_like(adv)))
+
+    def test_gate_keeps_cost_tiebreak_for_scoring_rollouts(self):
+        # cheaper correct rollout wins, the failed one pays no cost
+        rewards = _rewards_from_scores([1.0, 1.0, 0.0])
+        mask = torch.ones(3, 3)
+        index = np.array(["q", "q", "q"])
+        cost = torch.tensor([1.0, 5.0, 0.0])
+        with_cost, _ = compute_grpo_outcome_advantage(
+            rewards, mask, index, cost=cost, cost_coeff=0.5
+        )
+        no_cost, _ = compute_grpo_outcome_advantage(
+            rewards, mask, index, cost=cost, cost_coeff=0.0
+        )
+        self.assertGreater(
+            float(with_cost[0, -1]), float(with_cost[1, -1])
+        )
+        self.assertAlmostEqual(
+            float(with_cost[2, -1]), float(no_cost[2, -1]), places=5
+        )
 
 
 if __name__ == "__main__":
