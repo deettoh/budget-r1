@@ -100,6 +100,10 @@ class ResourcePoolManager:
 import torch
 from verl.utils.torch_functional import masked_mean
 
+# ces-best guard, ces alone can select degenerate checkpoints
+# where a ttc collapse masks an f1 collapse
+BEST_CES_F1_GUARD_RATIO = 0.9
+
 
 def apply_kl_penalty(
     data: DataProto,
@@ -905,6 +909,31 @@ class RayPPOTrainer(object):
             return "val/ces/all"
         return "val/f1/all"
 
+    def _passes_ces_f1_guard(self, val_metrics: dict) -> bool:
+        """Return False when a CES-best update must be vetoed.
+
+        CES can improve while the policy degenerates (retrieval and
+        F1 collapse jointly shrink TTC faster than F1 falls), so a
+        CES-selected best must keep val/f1/all within
+        BEST_CES_F1_GUARD_RATIO of the pre-training baseline. Guard
+        is inert for F1-based selection or when no baseline exists.
+        """
+        if self._best_metric_key() != "val/ces/all":
+            return True
+        baseline = getattr(self, "_baseline_val_f1", None)
+        f1 = val_metrics.get("val/f1/all")
+        if baseline is None or f1 is None:
+            return True
+        if float(f1) >= BEST_CES_F1_GUARD_RATIO * float(baseline):
+            return True
+        print(
+            f"[trainer] ces-best f1 guard: val/f1/all {float(f1):.4f}"
+            f" < {BEST_CES_F1_GUARD_RATIO} * baseline"
+            f" {float(baseline):.4f}; skipping best update"
+            f" (step {self.global_steps})"
+        )
+        return False
+
     def _maybe_save_best_checkpoint(self, val_metrics: dict) -> None:
         """Copy the just-saved step into actor/best on improvement.
 
@@ -912,6 +941,8 @@ class RayPPOTrainer(object):
         """
         key = self._best_metric_key()
         if key not in val_metrics:
+            return
+        if not self._passes_ces_f1_guard(val_metrics):
             return
         current = float(val_metrics[key])
 
@@ -997,6 +1028,9 @@ class RayPPOTrainer(object):
             val_metrics = self._validate()
             pprint(f"Initial validation metrics: {val_metrics}")
             logger.log(data=val_metrics, step=self.global_steps)
+            if "val/f1/all" in val_metrics:
+                # baseline for the ces-best f1 guard
+                self._baseline_val_f1 = float(val_metrics["val/f1/all"])
             if self.config.trainer.get("val_only", False):
                 logger.finish()
                 return
