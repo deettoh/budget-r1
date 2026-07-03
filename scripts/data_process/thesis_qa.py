@@ -316,6 +316,44 @@ def make_rl_record(
     }
 
 
+def cap_records_per_budget(
+    records: list[dict[str, Any]], cap: int, seed: int = 42
+) -> list[dict[str, Any]]:
+    """Return records with at most ``cap`` rows per gold_budget value.
+
+    Rebalances hop variance via a seeded per-group shuffle, kept in
+    original order. A non-positive cap returns the input unchanged.
+
+    Raises:
+        ValueError: If any record lacks ``extra_info.gold_budget``
+            (the cap only makes sense with ``--require_budget``).
+    """
+    if cap <= 0:
+        return records
+
+    import random
+
+    by_budget: dict[int, list[int]] = {}
+    for position, record in enumerate(records):
+        extra = record.get("extra_info") or {}
+        if "gold_budget" not in extra:
+            raise ValueError(
+                "cap_records_per_budget needs extra_info.gold_budget "
+                "on every record; rebuild with --require_budget"
+            )
+        by_budget.setdefault(int(extra["gold_budget"]), []).append(
+            position
+        )
+
+    keep: set[int] = set()
+    for budget in sorted(by_budget):
+        positions = list(by_budget[budget])
+        random.Random(seed + budget).shuffle(positions)
+        keep.update(positions[:cap])
+
+    return [r for i, r in enumerate(records) if i in keep]
+
+
 def load_named_dataset(data_source: str):
     """Return the FlashRAG HuggingFace dataset for ``data_source``."""
     import datasets
@@ -366,7 +404,20 @@ def main() -> None:
     parser.add_argument("--max_budget", type=int, default=5)
     parser.add_argument("--train_split", default="train")
     parser.add_argument("--val_split", default="dev")
+    parser.add_argument(
+        "--max_train_per_budget",
+        type=int,
+        default=0,
+        help="cap train rows per gold_budget value (0 = off); "
+        "requires --require_budget",
+    )
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
+
+    if args.max_train_per_budget > 0 and not args.require_budget:
+        raise ValueError(
+            "--max_train_per_budget requires --require_budget"
+        )
 
     data_sources = [
         source.strip() for source in args.data_sources.split(",") if source.strip()
@@ -378,6 +429,9 @@ def main() -> None:
     os.makedirs(args.local_dir, exist_ok=True)
     train_records = build_records(
         data_sources, args.mode, args.train_split, args.require_budget, args.max_budget
+    )
+    train_records = cap_records_per_budget(
+        train_records, args.max_train_per_budget, args.seed
     )
     val_records = build_records(
         data_sources, args.mode, args.val_split, args.require_budget, args.max_budget

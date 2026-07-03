@@ -4,6 +4,7 @@ import unittest
 
 from scripts.data_process import thesis_qa
 from scripts.data_process.thesis_qa import (
+    cap_records_per_budget,
     derive_gold_budget,
     extract_gold_titles,
     make_rl_record,
@@ -138,6 +139,53 @@ class ExtractGoldTitlesMusiqueTest(unittest.TestCase):
             },
         }
         self.assertEqual(extract_gold_titles(example, "musique"), [])
+
+
+class CapRecordsPerBudgetTest(unittest.TestCase):
+    def _records(self, budgets):
+        return [
+            {"extra_info": {"gold_budget": g, "index": i}}
+            for i, g in enumerate(budgets)
+        ]
+
+    def test_caps_each_budget_value_independently(self):
+        records = self._records([2, 2, 2, 2, 3, 3, 4])
+        capped = cap_records_per_budget(records, cap=2, seed=42)
+        from collections import Counter
+        dist = Counter(
+            r["extra_info"]["gold_budget"] for r in capped
+        )
+        self.assertEqual(dist[2], 2)
+        self.assertEqual(dist[3], 2)
+        self.assertEqual(dist[4], 1)
+
+    def test_deterministic_for_same_seed(self):
+        records = self._records([2] * 50 + [3] * 5)
+        a = cap_records_per_budget(records, cap=10, seed=7)
+        b = cap_records_per_budget(records, cap=10, seed=7)
+        self.assertEqual(
+            [r["extra_info"]["index"] for r in a],
+            [r["extra_info"]["index"] for r in b],
+        )
+
+    def test_no_op_when_cap_not_positive(self):
+        records = self._records([2, 2, 3])
+        self.assertEqual(
+            cap_records_per_budget(records, cap=0, seed=42), records
+        )
+
+    def test_does_not_mutate_input(self):
+        records = self._records([2, 2, 3])
+        before = [r["extra_info"]["index"] for r in records]
+        cap_records_per_budget(records, cap=1, seed=42)
+        self.assertEqual(
+            [r["extra_info"]["index"] for r in records], before
+        )
+
+    def test_raises_when_gold_budget_missing(self):
+        records = [{"extra_info": {"index": 0}}]
+        with self.assertRaises(ValueError):
+            cap_records_per_budget(records, cap=1, seed=42)
 
 
 class MakeRlRecordTest(unittest.TestCase):
