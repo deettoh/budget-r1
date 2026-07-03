@@ -18,19 +18,33 @@ def main() -> None:
     keys = sorted(first.keys()) if isinstance(first, dict) else type(first)
     print(f"rows={len(frame)} first_extra_info_keys={keys}")
 
-    non_empty = 0
-    for extra in frame["extra_info"]:
+    # a whole-file count hid musique's empty gold_titles
+    per_source: dict[str, list[int]] = {}
+    for source, extra in zip(frame["data_source"], frame["extra_info"]):
+        counts = per_source.setdefault(str(source), [0, 0])
+        counts[1] += 1
         if not isinstance(extra, dict):
             continue
         gold = extra.get("gold_titles")
         if gold is not None and len(gold) > 0:
-            non_empty += 1
-    print(f"rows with non-empty gold_titles: {non_empty}/{len(frame)}")
+            counts[0] += 1
+
+    empty_sources = []
+    for source in sorted(per_source):
+        non_empty, total = per_source[source]
+        print(f"  {source}: non-empty gold_titles {non_empty}/{total}")
+        if non_empty == 0:
+            empty_sources.append(source)
 
     if isinstance(first, dict) and first.get("gold_titles") is not None:
         print(f"sample gold_titles: {list(first['gold_titles'])}")
     else:
         print("WARNING: gold_titles MISSING from first row")
+
+    if empty_sources:
+        raise SystemExit(
+            f"FAIL: zero gold_titles coverage for {empty_sources}"
+        )
 
 
 if __name__ == "__main__":
