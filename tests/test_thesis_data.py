@@ -5,6 +5,7 @@ import unittest
 from scripts.data_process import thesis_qa
 from scripts.data_process.thesis_qa import (
     derive_gold_budget,
+    extract_gold_titles,
     make_rl_record,
     make_search_prefix,
 )
@@ -73,6 +74,70 @@ class ThesisDataTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             derive_gold_budget(example, "hotpotqa")
+
+
+class ExtractGoldTitlesMusiqueTest(unittest.TestCase):
+    """FlashRAG musique carries titles only inside the decomposition.
+
+    Every musique row lacks supporting_facts / paragraphs, so the
+    extractor must read metadata.question_decomposition[*]
+    .support_paragraph.title (the hole that zeroed grounding on
+    musique in jobs 6695-6722).
+    """
+
+    def _flashrag_musique_example(self):
+        return {
+            "question": "Who is the spouse of the Green performer?",
+            "golden_answers": ["Miquette Giraudy"],
+            "metadata": {
+                "answerable": True,
+                "question_decomposition": [
+                    {
+                        "id": 460946,
+                        "question": "Green >> performer",
+                        "answer": "Steve Hillage",
+                        "paragraph_support_idx": 10,
+                        "support_paragraph": {
+                            "idx": 10,
+                            "title": "Green (Steve Hillage album)",
+                            "paragraph_text": "Green is the fourth...",
+                            "is_supporting": True,
+                        },
+                    },
+                    {
+                        "id": 294723,
+                        "question": "#1 >> spouse",
+                        "answer": "Miquette Giraudy",
+                        "paragraph_support_idx": 5,
+                        "support_paragraph": {
+                            "idx": 5,
+                            "title": "Miquette Giraudy",
+                            "paragraph_text": "Miquette Giraudy...",
+                            "is_supporting": True,
+                        },
+                    },
+                ],
+            },
+        }
+
+    def test_titles_extracted_from_decomposition_support(self):
+        titles = extract_gold_titles(
+            self._flashrag_musique_example(), "musique"
+        )
+        self.assertEqual(
+            titles,
+            ["Green (Steve Hillage album)", "Miquette Giraudy"],
+        )
+
+    def test_decomposition_without_support_paragraph_is_safe(self):
+        example = {
+            "metadata": {
+                "question_decomposition": [
+                    {"id": 1, "question": "q", "answer": "a"},
+                ],
+            },
+        }
+        self.assertEqual(extract_gold_titles(example, "musique"), [])
 
 
 class MakeRlRecordTest(unittest.TestCase):

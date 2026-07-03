@@ -187,6 +187,18 @@ def extract_gold_titles(
         ):
             titles.add(str(paragraph["title"]))
 
+    # flashrag musique has no paragraphs field
+    # its only title signal is decomposition support_paragraph
+    decomposition = example.get("question_decomposition") or metadata.get(
+        "question_decomposition"
+    )
+    for step in _as_list(decomposition):
+        if not isinstance(step, dict):
+            continue
+        support = step.get("support_paragraph")
+        if isinstance(support, dict) and support.get("title"):
+            titles.add(str(support["title"]))
+
     return sorted(titles)
 
 
