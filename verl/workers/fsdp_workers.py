@@ -214,6 +214,22 @@ class ActorRolloutRefWorker(Worker):
                 # resume adapters, rank/targets come from the saved dir
                 actor_module = PeftModel.from_pretrained(
                     actor_module, adapter_path, is_trainable=True)
+                # fail loud on a silent init-state load — job 6781
+                # generated pure-base outputs from trained checkpoints
+                b_absmax = 0.0
+                for _name, _param in actor_module.named_parameters():
+                    if 'lora_B' in _name:
+                        b_absmax = max(
+                            b_absmax,
+                            float(_param.detach().abs().max()),
+                        )
+                if b_absmax == 0.0:
+                    raise RuntimeError(
+                        f'adapter at {adapter_path} loaded with all-'
+                        'zero lora_B; resume would silently run the '
+                        'base model')
+                print(f'[lora] adapter loaded from {adapter_path}, '
+                      f'max|lora_B|={b_absmax:.6f}')
             else:
                 peft_config = LoraConfig(
                     r=lora_config.get('r', 64),
