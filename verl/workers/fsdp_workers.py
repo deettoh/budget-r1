@@ -38,7 +38,11 @@ from verl.utils.model import compute_position_id_with_mask
 from verl.utils.flops_counter import FlopsCounter
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 
-from search_r1.lora_utils import resolve_adapter_path, strip_fsdp_prefix
+from search_r1.lora_utils import (
+    ADAPTER_WEIGHTS_FILE,
+    resolve_adapter_path,
+    strip_fsdp_prefix,
+)
 
 from codetiming import Timer
 
@@ -208,12 +212,32 @@ class ActorRolloutRefWorker(Worker):
         torch.distributed.barrier()
 
         if should_wrap_lora:
-            from peft import LoraConfig, PeftModel, get_peft_model
+            from peft import (
+                LoraConfig,
+                get_peft_model,
+                set_peft_model_state_dict,
+            )
             adapter_path = resolve_adapter_path(lora_config)
             if adapter_path is not None:
-                # resume adapters, rank/targets come from the saved dir
-                actor_module = PeftModel.from_pretrained(
-                    actor_module, adapter_path, is_trainable=True)
+                # resume adapters, rank/targets come from the saved
+                # dir. NOT PeftModel.from_pretrained — on peft 0.19 +
+                # transformers 4.47 it imports a module that only
+                # exists in transformers>=4.50 (job 6792 crash)
+                from safetensors.torch import load_file
+                peft_config = LoraConfig.from_pretrained(adapter_path)
+                peft_config.inference_mode = False
+                actor_module = get_peft_model(
+                    actor_module, peft_config)
+                adapter_state = load_file(
+                    os.path.join(adapter_path, ADAPTER_WEIGHTS_FILE))
+                load_result = set_peft_model_state_dict(
+                    actor_module, adapter_state)
+                unexpected = list(
+                    getattr(load_result, 'unexpected_keys', []))
+                if unexpected:
+                    raise RuntimeError(
+                        'adapter resume left unexpected keys '
+                        f'(first 5): {unexpected[:5]}')
                 # fail loud on a silent init-state load — job 6781
                 # generated pure-base outputs from trained checkpoints
                 b_absmax = 0.0
