@@ -229,6 +229,7 @@ class RewardManager:
             declared_budget = (
                 int(declared_budget_raw) if declared_budget_raw is not None else -1
             )
+            gold_budget = self._gold_budget(data_item)
 
             gold_recall = 0.0
             grounding_reward = 0.0
@@ -266,7 +267,7 @@ class RewardManager:
                     retrieved_tokens=retrieved_tokens,
                     declared_budget=effective_budget,
                     config=cost_cfg,
-                    gold_budget=self._gold_budget(data_item),
+                    gold_budget=gold_budget,
                     grounding_reward=grounding_reward,
                 )
             else:
@@ -285,6 +286,9 @@ class RewardManager:
                     "retrieved_tokens": int(retrieved_tokens),
                     "valid_search_calls": int(valid_search_calls),
                     "declared_budget": int(declared_budget),
+                    "gold_budget": (
+                        int(gold_budget) if gold_budget is not None else -1
+                    ),
                     "reward": float(score),
                     "answer_score": float(answer_score),
                     "answer_reward": float(answer_reward),

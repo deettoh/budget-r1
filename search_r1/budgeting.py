@@ -41,7 +41,7 @@ def title_recall(
 
 
 def parse_retrieved_titles(text: str) -> list[str]:
-    """Return titles from the ``Doc i(Title: ...)`` blocks in ``text``."""
+    """Return the titles of the ``Doc i(Title: ...)`` blocks."""
     return [m.strip() for m in _TITLE_PATTERN.findall(text or "")]
 
 
@@ -50,7 +50,7 @@ def compute_grounding_reward(
     gold_titles: Sequence[str],
     lam: float,
 ) -> float:
-    """Return ``lam * gold-passage recall``, decoupled from the answer."""
+    """Return lam times gold-passage recall, answer-independent."""
     return lam * title_recall(retrieved_titles, gold_titles)
 
 
@@ -79,6 +79,24 @@ def parse_budget_declaration(text: str, max_budget: int = 5) -> Optional[int]:
     budget = int(match.group(1))
     if 0 <= budget <= max_budget:
         return budget
+    return None
+
+
+def find_budget_digit_position(
+    response_ids: Sequence[int],
+    budget_mask: Sequence[int],
+    digit_token_ids: Sequence[int],
+) -> Optional[int]:
+    """Return the index of the declared digit inside the budget span.
+
+    Feeds the budget-CE aux loss. None when the span holds no digit.
+    """
+    digit_set = set(digit_token_ids)
+    for position, (token, masked) in enumerate(
+        zip(response_ids, budget_mask)
+    ):
+        if masked and token in digit_set:
+            return position
     return None
 
 

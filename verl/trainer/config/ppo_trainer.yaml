@@ -24,9 +24,9 @@ actor_rollout_ref:
     enable_gradient_checkpointing: False
     use_remove_padding: False
     lora:
-      enabled: false  # when true, freeze base and train LoRA adapters only
-      adapter_path: null  # dir to resume adapters from, null = fresh
-      quant_4bit: false  # QLoRA: load frozen base in 4-bit (nf4) to fit 24gb
+      enabled: false
+      adapter_path: null  # null = fresh
+      quant_4bit: false
       r: 64
       alpha: 128
       dropout: 0.05
@@ -51,13 +51,13 @@ actor_rollout_ref:
     use_kl_loss: False # True for GRPO
     kl_loss_coef: 0.001 # for grpo
     kl_loss_type: low_var_kl # for grpo
-    # budget-planner mechanisms D and E (default off keep baseline)
     budget_entropy_coeff: 0.0
     kl_exclude_budget: false
+    budget_ce_coeff: 0.0  # aux CE to gold digit, off by 0
     ppo_epochs: 1
     shuffle: False
     ulysses_sequence_parallel_size: 1 # sp size
-    log_prob_chunk_size: null  # tokens/chunk; null = stock full path
+    log_prob_chunk_size: null  # null = full path
     optim:
       lr: 1e-6
       lr_warmup_steps_ratio: 0.  # the total steps will be injected during runtime
@@ -173,36 +173,26 @@ retriever:
   model_path: intfloat/e5-base-v2
   faiss_gpu: true
   batch_size: 512
-  faiss_nprobe: null  # frozen IVF nprobe; null = index default
+  faiss_nprobe: null  # null = index default
 
 budget_planner:
   enabled: false
   max_budget: 5
-  # bootstrap forced execution: block early answers up to declared k
-  # while global_steps <= until_step, then anneal off (train-only)
-  forced_exec:
+  forced_exec:  # block early answers up to k, then anneal (train-only)
     enabled: false
     until_step: 0
-    # force >= min_searches executed hops during bootstrap (raises the
-    # effective cap above declared so multi-hop is explored); 0 = off
-    min_searches: 0
+    min_searches: 0  # min forced hops, 0 = off
 
 cost_reward:
   enabled: false
   alpha: 0.05
   beta: 0.0001
   gamma: 0.01
-  # declaration floor: -delta*max(0, gold_budget - declared); off by 0
-  delta: 0.0
-  # answer reward metric: em (baseline parity) | f1 | em_f1
-  answer_metric: em
+  delta: 0.0  # under-declaration floor, off by 0
+  answer_metric: em  # em | f1 | em_f1
   max_budget: ${budget_planner.max_budget}
-  # gold-passage grounding: +lam*recall of gold titles; off by 0
-  grounding: {enabled: false, lam: 0.0}
-  # option a: subtract coeff*within-group z(cost) from advantage
-  # (gated on reward>0); reward then zeroes alpha/beta but KEEPS
-  # gamma/delta couplings (v5); off by 0
-  cost_in_advantage: 0.0
+  grounding: {enabled: false, lam: 0.0}  # +lam*gold recall, off by 0
+  cost_in_advantage: 0.0  # z(cost) in advantage, off by 0
 
 algorithm:
   gamma: 1.0
@@ -230,6 +220,8 @@ trainer:
   critic_warmup: 0
   default_hdfs_dir: ~/experiments/gsm8k/ppo/${trainer.experiment_name}
   default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}
+  val_do_sample: false  # sample val, false = greedy
+  best_by_calibration: false  # best ckpt by calibration
 
 max_turns: 10
 do_search: true

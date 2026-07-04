@@ -9,6 +9,7 @@ from search_r1.budgeting import (
     compute_budget_reward,
     compute_grounding_reward,
     curriculum_gamma,
+    find_budget_digit_position,
     normalize_title,
     parse_budget_declaration,
     parse_retrieved_titles,
@@ -303,6 +304,32 @@ class GroundingRewardTest(unittest.TestCase):
         self.assertGreater(worst_correct, best_incorrect)
 
 
+class FindBudgetDigitPositionTest(unittest.TestCase):
+    # token ids: 10..19 stand in for digits "0".."9"
+    DIGITS = list(range(10, 20))
+
+    def test_finds_digit_inside_budget_span(self):
+        ids = [50, 51, 12, 52, 99]
+        mask = [0, 1, 1, 1, 0]
+        self.assertEqual(
+            find_budget_digit_position(ids, mask, self.DIGITS), 2
+        )
+
+    def test_ignores_digit_outside_span(self):
+        ids = [12, 51, 52]
+        mask = [0, 1, 1]
+        self.assertIsNone(
+            find_budget_digit_position(ids, mask, self.DIGITS)
+        )
+
+    def test_none_when_span_absent(self):
+        ids = [50, 51, 52]
+        mask = [0, 0, 0]
+        self.assertIsNone(
+            find_budget_digit_position(ids, mask, self.DIGITS)
+        )
+
+
 class CostInAdvantageRewardTest(unittest.TestCase):
     """v5 reward path: alpha/beta zeroed, gamma/delta couplings kept.
 
@@ -327,12 +354,11 @@ class CostInAdvantageRewardTest(unittest.TestCase):
         )
         self.assertEqual(parts["retrieval_penalty"], 0.0)
         self.assertEqual(parts["token_penalty"], 0.0)
-        # gamma*max(0, 4-1) = .03, delta floor idle since declared > gold
+        # gamma*max(0, 4-1) = .03, delta idle since declared > gold
         self.assertTrue(math.isclose(score, 1.0 + 0.25 - 0.03))
 
     def test_declare_down_escape_costs_more_than_gamma_saves(self):
-        # delta > gamma invariant: dropping declared one unit below
-        # gold saves gamma but pays delta, so net reward falls
+        # delta > gamma, so under-declaring saves gamma but pays delta
         cfg = BudgetRewardConfig(
             alpha=0.0, beta=0.0, gamma=0.01, delta=0.02
         )

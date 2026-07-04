@@ -48,6 +48,7 @@ from verl.utils.seqlen_balancing import (
 
 import re
 import shutil
+from search_r1.budgeting import find_budget_digit_position
 from search_r1.llm_agent.generation import LLMGenerationManager, GenerationConfig
 from verl.utils.reward_score.qa_metrics import cost_efficiency_score
 
@@ -605,7 +606,11 @@ class RayPPOTrainer(object):
                     "eos_token_id": self.tokenizer.eos_token_id,
                     "pad_token_id": self.tokenizer.pad_token_id,
                     "recompute_log_prob": False,
-                    "do_sample": False,
+                    # val_do_sample switches greedy val to sampling
+                    # for declared-distribution diagnostics
+                    "do_sample": bool(
+                        self.config.trainer.get("val_do_sample", False)
+                    ),
                     "validate": True,
                 }
 
@@ -650,7 +655,11 @@ class RayPPOTrainer(object):
                     "eos_token_id": self.tokenizer.eos_token_id,
                     "pad_token_id": self.tokenizer.pad_token_id,
                     "recompute_log_prob": False,
-                    "do_sample": False,
+                    # val_do_sample switches greedy val to sampling
+                    # for declared-distribution diagnostics
+                    "do_sample": bool(
+                        self.config.trainer.get("val_do_sample", False)
+                    ),
                     "validate": True,
                 }
                 with _timer("step", timing_raw):
@@ -718,8 +727,15 @@ class RayPPOTrainer(object):
                             "has_answer": [],
                             "declared_budget": [],
                             "gold_recall": [],
+                            "budget_calibration": [],
                         },
                     )
+                    declared = entry.get("declared_budget", -1)
+                    gold = entry.get("gold_budget", -1)
+                    if declared >= 0 and gold >= 0:
+                        bucket["budget_calibration"].append(
+                            -abs(declared - gold)
+                        )
                     bucket["gold_recall"].append(entry.get("gold_recall", 0.0))
                     bucket["em"].append(entry["em"])
                     bucket["f1"].append(entry["f1"])
@@ -759,6 +775,10 @@ class RayPPOTrainer(object):
                 if bucket["declared_budget"]:
                     metric_dict[f"val/declared_budget/{source}"] = float(
                         np.mean(bucket["declared_budget"])
+                    )
+                if bucket["budget_calibration"]:
+                    metric_dict[f"val/budget_calibration/{source}"] = (
+                        float(np.mean(bucket["budget_calibration"]))
                     )
 
         # val_only dumps raw per-sample metrics for offline analysis
@@ -898,27 +918,87 @@ class RayPPOTrainer(object):
             self.critic_wg.save_checkpoint(critic_local_path, critic_remote_path)
 
     def _best_metric_key(self):
-        """Pick the validation metric used for best-checkpoint selection.
+        """Pick the best-checkpoint metric, all higher-is-better.
 
-          - cost_reward.enabled=false -> val/f1/all
-          - cost_reward.enabled=true -> val/ces/all
-
-        Both are higher-is-better.
+        calibration -> budget_calibration, cost on -> ces, else f1.
         """
+        if self.config.trainer.get("best_by_calibration", False):
+            return "val/budget_calibration/all"
         if getattr(self.config.cost_reward, "enabled", False):
             return "val/ces/all"
         return "val/f1/all"
 
+    def _budget_digit_token_ids(self):
+        """Return the token ids of the digits "0".."9" (cached).
+
+        Raises:
+            ValueError: If any digit does not tokenize to one token
+                (the budget-CE digit locator assumes single tokens).
+        """
+        if getattr(self, "_digit_token_ids", None) is None:
+            ids = []
+            for digit in range(10):
+                toks = self.tokenizer(
+                    str(digit), add_special_tokens=False
+                )["input_ids"]
+                if len(toks) != 1:
+                    raise ValueError(
+                        f"digit {digit!r} tokenizes to {toks}; "
+                        "budget-CE needs single-token digits"
+                    )
+                ids.append(toks[0])
+            self._digit_token_ids = ids
+        return self._digit_token_ids
+
+    def _attach_budget_ce_targets(self, batch) -> None:
+        """Add ``budget_ce_labels``/``budget_ce_mask`` to the batch.
+
+        Labels the digit position with the gold digit for the aux CE.
+        No-op unless budget_ce_coeff > 0 and a budget_mask exists.
+        """
+        coeff = float(
+            self.config.actor_rollout_ref.actor.get(
+                "budget_ce_coeff", 0.0
+            )
+        )
+        if coeff <= 0 or "budget_mask" not in batch.batch.keys():
+            return
+
+        input_ids = batch.batch["input_ids"]
+        budget_mask = batch.batch["budget_mask"]
+        extras = batch.non_tensor_batch.get("extra_info")
+        digit_ids = self._budget_digit_token_ids()
+
+        labels = torch.zeros_like(input_ids)
+        mask = torch.zeros_like(input_ids)
+        for i in range(input_ids.size(0)):
+            extra = extras[i] if extras is not None else None
+            gold = (
+                extra.get("gold_budget")
+                if isinstance(extra, dict)
+                else None
+            )
+            if gold is None:
+                continue
+            position = find_budget_digit_position(
+                input_ids[i].tolist(),
+                budget_mask[i].tolist(),
+                digit_ids,
+            )
+            if position is None:
+                continue
+            labels[i, position] = digit_ids[int(gold)]
+            mask[i, position] = 1
+        batch.batch["budget_ce_labels"] = labels
+        batch.batch["budget_ce_mask"] = mask
+
     def _passes_ces_f1_guard(self, val_metrics: dict) -> bool:
         """Return False when a CES-best update must be vetoed.
 
-        CES can improve while the policy degenerates (retrieval and
-        F1 collapse jointly shrink TTC faster than F1 falls), so a
-        CES-selected best must keep val/f1/all within
-        BEST_CES_F1_GUARD_RATIO of the pre-training baseline. Guard
-        is inert for F1-based selection or when no baseline exists.
+        Non-F1 selection must keep val/f1 within the guard ratio of
+        the baseline. Inert for F1 selection or with no baseline.
         """
-        if self._best_metric_key() != "val/ces/all":
+        if self._best_metric_key() == "val/f1/all":
             return True
         baseline = getattr(self, "_baseline_val_f1", None)
         f1 = val_metrics.get("val/f1/all")
@@ -1165,6 +1245,10 @@ class RayPPOTrainer(object):
                             interleave=True,
                         )
                         batch = batch.union(final_gen_batch_output)
+
+                    # budget-CE targets ride the tensor batch so they
+                    # survive the _balance_batch reorder below
+                    self._attach_budget_ce_targets(batch)
 
                     ####################
                     ####################

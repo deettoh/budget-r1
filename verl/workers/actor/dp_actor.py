@@ -62,12 +62,32 @@ class DataParallelPPOActor(BasePPOActor):
 
         self.compute_entropy_from_logits = torch.compile(verl_F.entropy_from_logits, dynamic=True)
 
-    def _forward_micro_batch(self, micro_batch, temperature) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _budget_ce_from_logits(self, logits, labels, mask):
+        """Return mean CE toward gold digit over masked rows.
+
+        Softmax runs only on the few masked digit rows. None when none.
         """
-        Returns: 
+        rows = mask.bool()
+        if not rows.any():
+            return None
+        sel_logits = logits[rows].float()
+        sel_labels = labels[rows]
+        sel_logp = sel_logits.log_softmax(-1).gather(
+            1, sel_labels.unsqueeze(-1)
+        ).squeeze(-1)
+        return -sel_logp.mean()
+
+    def _forward_micro_batch(
+        self, micro_batch, temperature, compute_budget_ce=False
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Returns:
             entropy: # (bs, response_len)
             log_probs: # (bs, response_len)
+            budget_ce: scalar CE toward the gold budget digit, or
+                None when disabled / no digit rows in the batch
         """
+        budget_ce = None
         response_length = micro_batch['responses'].size(-1)
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             input_ids = micro_batch['input_ids']
@@ -105,6 +125,34 @@ class DataParallelPPOActor(BasePPOActor):
                 logits_rmpad = output.logits.squeeze(0)  # (total_nnz, vocab_size)
 
                 logits_rmpad.div_(temperature)
+
+                if compute_budget_ce:
+                    if self.use_ulysses_sp:
+                        raise NotImplementedError(
+                            'budget_ce_coeff with ulysses sp'
+                        )
+                    # roll to match rmpad, packed pos j predicts j+1
+                    ce_labels = index_first_axis(
+                        rearrange(
+                            micro_batch['budget_ce_labels']
+                            .unsqueeze(-1), "b s ... -> (b s) ..."
+                        ), indices
+                    ).transpose(0, 1)
+                    ce_mask = index_first_axis(
+                        rearrange(
+                            micro_batch['budget_ce_mask']
+                            .unsqueeze(-1), "b s ... -> (b s) ..."
+                        ), indices
+                    ).transpose(0, 1)
+                    ce_labels = torch.roll(
+                        ce_labels, shifts=-1, dims=1
+                    ).squeeze(0)
+                    ce_mask = torch.roll(
+                        ce_mask, shifts=-1, dims=1
+                    ).squeeze(0)
+                    budget_ce = self._budget_ce_from_logits(
+                        logits_rmpad, ce_labels, ce_mask
+                    )
 
                 if self.log_prob_chunk_size:
                     log_probs, entropy_rmpad = (
@@ -155,7 +203,19 @@ class DataParallelPPOActor(BasePPOActor):
                 log_probs = logprobs_from_logits(logits, micro_batch['responses'])
                 entropy = verl_F.entropy_from_logits(logits)  # (bsz, response_length)
 
-            return entropy, log_probs
+                if compute_budget_ce:
+                    # sliced logits[:, t] predict token t, no roll
+                    ce_labels = micro_batch['budget_ce_labels'][
+                        :, -response_length:
+                    ]
+                    ce_mask = micro_batch['budget_ce_mask'][
+                        :, -response_length:
+                    ]
+                    budget_ce = self._budget_ce_from_logits(
+                        logits, ce_labels, ce_mask
+                    )
+
+            return entropy, log_probs, budget_ce
 
     def _optimizer_step(self):
         assert self.config.grad_clip is not None
@@ -205,7 +265,7 @@ class DataParallelPPOActor(BasePPOActor):
         log_probs_lst = []
         for micro_batch in micro_batches:
             with torch.no_grad():
-                _, log_probs = self._forward_micro_batch(micro_batch, temperature=temperature)
+                _, log_probs, _ = self._forward_micro_batch(micro_batch, temperature=temperature)
             log_probs_lst.append(log_probs)
         log_probs = torch.concat(log_probs_lst, dim=0)
 
@@ -238,6 +298,14 @@ class DataParallelPPOActor(BasePPOActor):
         )
         if use_budget_mask:
             select_keys.append('budget_mask')
+        # auxiliary ce to the gold budget digit, rl alone washes it out
+        budget_ce_coeff = self.config.get('budget_ce_coeff', 0.0)
+        use_budget_ce = (
+            budget_ce_coeff > 0.0
+            and 'budget_ce_labels' in data.batch.keys()
+        )
+        if use_budget_ce:
+            select_keys.extend(['budget_ce_labels', 'budget_ce_mask'])
         batch = data.select(batch_keys=select_keys).batch
 
         # Split to make minibatch iterator for updating the actor
@@ -278,7 +346,10 @@ class DataParallelPPOActor(BasePPOActor):
                     ].float()
 
                 # all return: (bsz, response_length)
-                entropy, log_prob = self._forward_micro_batch(micro_batch=data, temperature=temperature)
+                entropy, log_prob, budget_ce = self._forward_micro_batch(
+                    micro_batch=data, temperature=temperature,
+                    compute_budget_ce=use_budget_ce,
+                )
 
                 pg_loss, pg_clipfrac, ppo_kl = core_algos.compute_policy_loss(old_log_prob=old_log_prob,
                                                                               log_prob=log_prob,
@@ -291,8 +362,7 @@ class DataParallelPPOActor(BasePPOActor):
                 # compute policy loss
                 policy_loss = pg_loss - entropy_loss * entropy_coeff
 
-                # extra entropy on the budget token to explore k
-                # zero coeff keeps the baseline intact
+                # extra entropy on the budget token, off=baseline
                 if (
                     budget_mask is not None
                     and budget_entropy_coeff != 0.0
@@ -303,14 +373,21 @@ class DataParallelPPOActor(BasePPOActor):
                         policy_loss - budget_entropy * budget_entropy_coeff
                     )
 
+                if budget_ce is not None:
+                    policy_loss = (
+                        policy_loss + budget_ce * budget_ce_coeff
+                    )
+                    metrics['actor/budget_ce_loss'] = (
+                        budget_ce.detach().item()
+                    )
+
                 if self.config.use_kl_loss:
                     ref_log_prob = data['ref_log_prob']
                     # compute kl loss
                     kld = core_algos.kl_penalty(logprob=log_prob,
                                                 ref_logprob=ref_log_prob,
                                                 kl_penalty=self.config.kl_loss_type)
-                    # drop budget tokens from the kl anchor so the
-                    # declaration is not pulled back to the ref policy
+                    # drop budget tokens from the kl anchor
                     kl_mask = response_mask
                     if budget_mask is not None and kl_exclude_budget:
                         kl_mask = response_mask * (1 - budget_mask)
