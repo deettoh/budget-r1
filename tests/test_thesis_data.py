@@ -16,13 +16,19 @@ class ThesisDataTest(unittest.TestCase):
     def test_data_generator_only_supports_rl_mode(self):
         self.assertEqual(thesis_qa.SUPPORTED_MODES, ("rl",))
 
-    def test_make_search_prefix_can_require_budget_first(self):
+    def test_make_search_prefix_requires_budget_before_search(self):
+        # think-first, reasoning precedes the declaration
+        # budget still binds before any search
         prefix = make_search_prefix(
             "Who wrote the book?", require_budget=True, max_budget=5
         )
 
         self.assertIn("Question: Who wrote the book?", prefix)
-        self.assertIn("first output exactly one retrieval budget", prefix)
+        self.assertIn("First think inside <think>", prefix)
+        self.assertIn(
+            "before any search, output exactly one retrieval budget",
+            prefix,
+        )
         self.assertIn("<budget>k</budget>", prefix)
         self.assertIn("[0, 5]", prefix)
 

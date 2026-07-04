@@ -474,7 +474,7 @@ class LLMGenerationManager:
             blocked_search_counts = [0 for _ in predictions]
 
         def _effective_cap(idx):
-            # forcing raises the cap to the min-search floor, else declared
+            # forcing raises the cap to min_searches, else declared
             declared = declared_budgets[idx]
             if force_search_active and declared >= 0:
                 return max(declared, self.config.min_searches)
@@ -529,7 +529,7 @@ class LLMGenerationManager:
                             valid_action.append(1)
                             is_search.append(0)
                 elif self.config.enable_budget_planner and declared_budgets[i] < 0:
-                    next_obs.append(f'\nBefore reasoning, searching, or answering, I must declare a retrieval budget from 0 to {self.config.max_budget} using <budget>k</budget>.\n')
+                    next_obs.append(f'\nBefore searching or answering, I must declare a retrieval budget from 0 to {self.config.max_budget} using <budget>k</budget>.\n')
                     dones.append(0)
                     valid_action.append(0)
                     is_search.append(0)
@@ -544,7 +544,7 @@ class LLMGenerationManager:
                             self.config.min_searches,
                         )
                     ):
-                        # bootstrap, block early answer so declared k binds the cap
+                        # bootstrap, block early answer so k binds
                         next_obs.append(
                             '\nThe declared retrieval budget has not been '
                             'used yet. I should search before answering.\n'
@@ -665,7 +665,7 @@ If I want to give the final answer, I should put the answer between <answer> and
             faiss_gpu=self.config.faiss_gpu,
             retrieval_model_path=self.config.retriever_model,
             retrieval_pooling_method="mean",
-            # cap query encode at 64, untrained policy emits huge queries
+            # cap query encode at 64, untrained policy runs long
             retrieval_query_max_length=64,
             retrieval_use_fp16=True,
             retrieval_batch_size=self.config.retrieval_batch_size,

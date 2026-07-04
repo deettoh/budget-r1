@@ -32,7 +32,8 @@ def make_search_prefix(
     question = normalize_question(question)
     if require_budget:
         return (
-            "Answer the given question. Before reasoning or searching, you must first output exactly one retrieval budget "
+            "Answer the given question. First think inside <think> and </think> about what the question asks "
+            "and how many search calls it likely needs. Then, before any search, output exactly one retrieval budget "
             f"as <budget>k</budget>, where k is an integer in [0, {max_budget}]. "
             "Use k as the maximum number of search calls needed. After the budget, "
             "you must conduct reasoning inside <think> and </think> first every time you get new information. "
