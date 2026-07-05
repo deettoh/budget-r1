@@ -212,13 +212,20 @@ class MakeRlRecordTest(unittest.TestCase):
         )
         self.assertEqual(rec["extra_info"]["gold_budget"], 2)
 
-    def test_gold_titles_absent_without_require_budget(self):
+    def test_gold_metadata_present_without_budget_prompt(self):
+        # changed 2026-07-06 for the §16 control parquet: gold
+        # metadata is always derived so the per-budget cap (and
+        # cost-only grounding) work on control-prompt data too
+        # require_budget now controls ONLY the prompt wording
         rec = make_rl_record(
             self._example(), 0, "hotpotqa", "dev",
             require_budget=False, max_budget=5,
         )
-        self.assertNotIn("gold_titles", rec["extra_info"])
-        self.assertNotIn("gold_budget", rec["extra_info"])
+        self.assertNotIn("<budget>", rec["prompt"][0]["content"])
+        self.assertEqual(
+            rec["extra_info"]["gold_titles"], ["Title A", "Title B"]
+        )
+        self.assertEqual(rec["extra_info"]["gold_budget"], 2)
 
 
 if __name__ == "__main__":

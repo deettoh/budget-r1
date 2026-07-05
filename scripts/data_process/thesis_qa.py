@@ -1,7 +1,7 @@
-"""Build Search-R1 RL parquet datasets (one record per QA example).
+"""Build Search-R1 RL parquet datasets, one record per QA example.
 
-``--require_budget`` adds ``extra_info.gold_budget`` via
-``derive_gold_budget``.
+--require_budget switches to the budget prompt. extra_info always
+carries gold_budget and gold_titles regardless.
 """
 
 import argparse
@@ -294,16 +294,19 @@ def make_rl_record(
 ) -> dict[str, Any]:
     """Return one RL parquet record.
 
-    ``extra_info.gold_budget`` is added only when ``require_budget``.
+    require_budget controls only the prompt wording, extra_info always
+    carries gold_budget and gold_titles for the cap and grounding.
     """
     question = make_search_prefix(
         example["question"], require_budget=require_budget, max_budget=max_budget
     )
     answer = extract_answer(example)
-    extra_info = {"split": split, "index": idx}
-    if require_budget:
-        extra_info["gold_budget"] = derive_gold_budget(example, data_source)
-        extra_info["gold_titles"] = extract_gold_titles(example, data_source)
+    extra_info = {
+        "split": split,
+        "index": idx,
+        "gold_budget": derive_gold_budget(example, data_source),
+        "gold_titles": extract_gold_titles(example, data_source),
+    }
 
     return {
         "data_source": data_source,
@@ -326,8 +329,7 @@ def cap_records_per_budget(
     original order. A non-positive cap returns the input unchanged.
 
     Raises:
-        ValueError: If any record lacks ``extra_info.gold_budget``
-            (the cap only makes sense with ``--require_budget``).
+        ValueError: If any record lacks ``extra_info.gold_budget``.
     """
     if cap <= 0:
         return records
@@ -340,7 +342,7 @@ def cap_records_per_budget(
         if "gold_budget" not in extra:
             raise ValueError(
                 "cap_records_per_budget needs extra_info.gold_budget "
-                "on every record; rebuild with --require_budget"
+                "on every record"
             )
         by_budget.setdefault(int(extra["gold_budget"]), []).append(
             position
@@ -409,16 +411,10 @@ def main() -> None:
         "--max_train_per_budget",
         type=int,
         default=0,
-        help="cap train rows per gold_budget value (0 = off); "
-        "requires --require_budget",
+        help="cap train rows per gold_budget value (0 = off)",
     )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
-
-    if args.max_train_per_budget > 0 and not args.require_budget:
-        raise ValueError(
-            "--max_train_per_budget requires --require_budget"
-        )
 
     data_sources = [
         source.strip() for source in args.data_sources.split(",") if source.strip()
