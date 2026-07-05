@@ -101,8 +101,7 @@ class ResourcePoolManager:
 import torch
 from verl.utils.torch_functional import masked_mean
 
-# ces-best guard, ces alone can select degenerate checkpoints
-# where a ttc collapse masks an f1 collapse
+# ces alone can pick degenerate ckpts (ttc masks f1)
 BEST_CES_F1_GUARD_RATIO = 0.9
 
 
@@ -181,8 +180,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0,
         response_length = responses.size(-1)
         attention_mask = data.batch["attention_mask"]
         response_mask = attention_mask[:, -response_length:]
-        # option (a) group-normalized cost in the advantage
-        # only when coeff>0 and the rollout emitted call counts
+        # group-normalized cost in the advantage, when coeff>0
         cost = None
         if cost_coeff > 0 and "valid_search_count" in data.batch:
             cost = data.batch["valid_search_count"]
@@ -551,8 +549,7 @@ class RayPPOTrainer(object):
 
         reward_tensor_lst = []
         data_source_lst = []
-        # RewardManager resets last_metrics each __call__ so accumulate
-        # per-sample dicts across val batches, not just the last one
+        # RewardManager resets last_metrics each call, so accumulate per-batch
         val_per_sample = []
 
         gen_config = GenerationConfig(
@@ -606,8 +603,7 @@ class RayPPOTrainer(object):
                     "eos_token_id": self.tokenizer.eos_token_id,
                     "pad_token_id": self.tokenizer.pad_token_id,
                     "recompute_log_prob": False,
-                    # val_do_sample switches greedy val to sampling
-                    # for declared-distribution diagnostics
+                    # val_do_sample switches greedy val to sampling for diagnostics
                     "do_sample": bool(
                         self.config.trainer.get("val_do_sample", False)
                     ),
@@ -655,8 +651,7 @@ class RayPPOTrainer(object):
                     "eos_token_id": self.tokenizer.eos_token_id,
                     "pad_token_id": self.tokenizer.pad_token_id,
                     "recompute_log_prob": False,
-                    # val_do_sample switches greedy val to sampling
-                    # for declared-distribution diagnostics
+                    # val_do_sample switches greedy val to sampling for diagnostics
                     "do_sample": bool(
                         self.config.trainer.get("val_do_sample", False)
                     ),
@@ -781,8 +776,7 @@ class RayPPOTrainer(object):
                         float(np.mean(bucket["budget_calibration"]))
                     )
 
-        # val_only dumps raw per-sample metrics for offline analysis
-        # gated so training stays byte-identical
+        # val_only dumps per-sample metrics, gated so training is identical
         if self.config.trainer.get("val_only", False) and per_sample:
             import json
             import os
@@ -1170,8 +1164,7 @@ class RayPPOTrainer(object):
                 ####################
                 # original code here
 
-                # forced execution is train-only, annealed off after
-                # until_step, default off keeps the baseline identical
+                # forced execution train-only, annealed after until_step
                 forced_exec = self.config.budget_planner.get(
                     "forced_exec", {}
                 )
@@ -1246,8 +1239,7 @@ class RayPPOTrainer(object):
                         )
                         batch = batch.union(final_gen_batch_output)
 
-                    # budget-CE targets ride the tensor batch so they
-                    # survive the _balance_batch reorder below
+                    # budget-CE targets ride the tensor batch to survive the reorder
                     self._attach_budget_ce_targets(batch)
 
                     ####################
@@ -1291,8 +1283,7 @@ class RayPPOTrainer(object):
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
                             batch = batch.union(reward_tensor)
 
-                        # gamma-curriculum, reward manager zeroes the
-                        # unused-budget gamma while forcing is active
+                        # gamma-curriculum, reward manager zeroes unused-budget gamma
                         batch.meta_info["force_active"] = force_active
                         # we combine with rule-based rm
                         reward_tensor = self.reward_fn(batch)
@@ -1391,6 +1382,13 @@ class RayPPOTrainer(object):
                         pprint(f"Final validation metrics: {val_metrics}")
                         logger.log(data=val_metrics, step=self.global_steps)
                         self._maybe_save_best_checkpoint(val_metrics)
+                    # increment runs before this check, so save misses final weights
+                    if (
+                        self.config.trainer.save_freq > 0
+                        and (self.global_steps - 1)
+                        % self.config.trainer.save_freq != 0
+                    ):
+                        self._save_checkpoint()
                     logger.finish()
                     return
 
