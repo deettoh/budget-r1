@@ -40,6 +40,7 @@ from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManage
 
 from search_r1.lora_utils import (
     ADAPTER_WEIGHTS_FILE,
+    insert_adapter_name,
     resolve_adapter_path,
     strip_fsdp_prefix,
 )
@@ -141,8 +142,7 @@ class ActorRolloutRefWorker(Worker):
         else:
             torch_dtype = PrecisionType.to_dtype(torch_dtype)
 
-        # val_only eval can't fit the fp32 actor (~11.5gb) beside vllm
-        # on 24gb so force bf16 weights defaults off training unchanged
+        # val_only forces bf16 weights, fp32 actor won't fit beside vllm
         if self.config.model.get('inference_bf16', False):
             torch_dtype = torch.bfloat16
 
@@ -156,8 +156,7 @@ class ActorRolloutRefWorker(Worker):
         if should_wrap_lora:
             torch_dtype = torch.bfloat16
 
-        # QLoRA loads the frozen base in 4-bit nf4 to fit the actor
-        # backward on 24gb quant_storage=bf16 lets fsdp flatten it
+        # QLoRA loads base in 4-bit nf4, quant_storage=bf16 lets fsdp flatten
         quant_4bit = bool(should_wrap_lora) and lora_config.get(
             'quant_4bit', False)
         bnb_config = None
@@ -212,34 +211,26 @@ class ActorRolloutRefWorker(Worker):
         torch.distributed.barrier()
 
         if should_wrap_lora:
-            from peft import (
-                LoraConfig,
-                get_peft_model,
-                set_peft_model_state_dict,
-            )
+            from peft import LoraConfig, get_peft_model
             adapter_path = resolve_adapter_path(lora_config)
             if adapter_path is not None:
-                # resume adapters, rank/targets come from the saved
-                # dir. NOT PeftModel.from_pretrained — on peft 0.19 +
-                # transformers 4.47 it imports a module that only
-                # exists in transformers>=4.50 (job 6792 crash)
+                # resume adapters via plain load_state_dict (peft needs tf>=4.50)
                 from safetensors.torch import load_file
                 peft_config = LoraConfig.from_pretrained(adapter_path)
                 peft_config.inference_mode = False
                 actor_module = get_peft_model(
                     actor_module, peft_config)
-                adapter_state = load_file(
-                    os.path.join(adapter_path, ADAPTER_WEIGHTS_FILE))
-                load_result = set_peft_model_state_dict(
-                    actor_module, adapter_state)
-                unexpected = list(
-                    getattr(load_result, 'unexpected_keys', []))
+                adapter_state = insert_adapter_name(load_file(
+                    os.path.join(adapter_path, ADAPTER_WEIGHTS_FILE)))
+                load_result = actor_module.load_state_dict(
+                    adapter_state, strict=False)
+                # missing_keys = frozen base (ok), unexpected key = failed rename
+                unexpected = list(load_result.unexpected_keys)
                 if unexpected:
                     raise RuntimeError(
                         'adapter resume left unexpected keys '
                         f'(first 5): {unexpected[:5]}')
-                # fail loud on a silent init-state load — job 6781
-                # generated pure-base outputs from trained checkpoints
+                # fail loud on a silent init-state load
                 b_absmax = 0.0
                 for _name, _param in actor_module.named_parameters():
                     if 'lora_B' in _name:

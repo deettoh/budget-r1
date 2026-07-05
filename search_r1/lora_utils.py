@@ -16,6 +16,27 @@ def strip_fsdp_prefix(name: str) -> str:
     return name.replace(_FSDP_PREFIX, "")
 
 
+def insert_adapter_name(
+    state_dict: dict, adapter_name: str = "default"
+) -> dict:
+    """Return a new dict with adapter names restored in lora keys.
+
+    PEFT strips the name when saving, plain load_state_dict needs it
+    back. Doing it here avoids peft loaders that need
+    transformers>=4.50.
+    """
+    renamed = {}
+    for key, value in state_dict.items():
+        for marker in ("lora_A", "lora_B"):
+            suffix = f".{marker}.weight"
+            if key.endswith(suffix):
+                key = (key[:-len(suffix)]
+                       + f".{marker}.{adapter_name}.weight")
+                break
+        renamed[key] = value
+    return renamed
+
+
 def resolve_adapter_path(lora_config) -> str | None:
     """Return a validated adapter dir to resume from, else None.
 

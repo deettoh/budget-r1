@@ -7,6 +7,7 @@ import unittest
 from search_r1.lora_utils import (
     ADAPTER_CONFIG_FILE,
     ADAPTER_WEIGHTS_FILE,
+    insert_adapter_name,
     resolve_adapter_path,
     strip_fsdp_prefix,
 )
@@ -68,6 +69,42 @@ class ResolveAdapterPathTest(unittest.TestCase):
             _write_adapter_dir(adapter, config=False)
             with self.assertRaises(FileNotFoundError):
                 resolve_adapter_path({"adapter_path": adapter})
+
+
+class InsertAdapterNameTest(unittest.TestCase):
+    def test_inserts_default_name_into_lora_keys(self):
+        state = {
+            "base_model.model.layers.0.q_proj.lora_A.weight": "a",
+            "base_model.model.layers.0.q_proj.lora_B.weight": "b",
+        }
+        renamed = insert_adapter_name(state)
+        self.assertEqual(
+            sorted(renamed),
+            [
+                "base_model.model.layers.0.q_proj"
+                ".lora_A.default.weight",
+                "base_model.model.layers.0.q_proj"
+                ".lora_B.default.weight",
+            ])
+        self.assertEqual(
+            renamed["base_model.model.layers.0.q_proj"
+                    ".lora_A.default.weight"], "a")
+
+    def test_custom_adapter_name(self):
+        state = {"m.lora_A.weight": "a"}
+        self.assertEqual(
+            insert_adapter_name(state, adapter_name="other"),
+            {"m.lora_A.other.weight": "a"})
+
+    def test_non_lora_keys_pass_through(self):
+        state = {"m.embed_tokens.weight": "w"}
+        self.assertEqual(insert_adapter_name(state), state)
+
+    def test_returns_new_dict_input_unchanged(self):
+        state = {"m.lora_B.weight": "b"}
+        renamed = insert_adapter_name(state)
+        self.assertIsNot(renamed, state)
+        self.assertEqual(state, {"m.lora_B.weight": "b"})
 
 
 if __name__ == "__main__":
