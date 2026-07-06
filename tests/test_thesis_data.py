@@ -147,6 +147,37 @@ class ExtractGoldTitlesMusiqueTest(unittest.TestCase):
         self.assertEqual(extract_gold_titles(example, "musique"), [])
 
 
+class BudgetTemplateTest(unittest.TestCase):
+    def test_minimal_keeps_native_wording_plus_budget(self):
+        # probe template: native prompt + one budget sentence, so
+        # the frozen-floor delta isolates the declaration ask
+        prefix = make_search_prefix(
+            "Who wrote the book?", require_budget=True,
+            max_budget=5, budget_template="minimal",
+        )
+        self.assertIn("<budget>k</budget>", prefix)
+        self.assertIn("integer in [0, 5]", prefix)
+        self.assertIn(
+            "as many times as your want, up to your budget k",
+            prefix,
+        )
+        self.assertNotIn("First think inside", prefix)
+        self.assertIn("Question: Who wrote the book?", prefix)
+
+    def test_default_template_is_think_first(self):
+        prefix = make_search_prefix(
+            "Who wrote the book?", require_budget=True, max_budget=5,
+        )
+        self.assertIn("First think inside", prefix)
+
+    def test_unknown_template_raises(self):
+        with self.assertRaises(ValueError):
+            make_search_prefix(
+                "Q?", require_budget=True, max_budget=5,
+                budget_template="fancy",
+            )
+
+
 class CapRecordsPerBudgetTest(unittest.TestCase):
     def _records(self, budgets):
         return [

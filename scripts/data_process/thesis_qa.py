@@ -21,15 +21,41 @@ def normalize_question(question: str) -> str:
     return question
 
 
+BUDGET_TEMPLATES = ("think_first", "minimal")
+
+
 def make_search_prefix(
-    question: str, require_budget: bool = False, max_budget: int = 5
+    question: str,
+    require_budget: bool = False,
+    max_budget: int = 5,
+    budget_template: str = "think_first",
 ) -> str:
     """Return the rollout user-prompt prefix.
 
-    With ``require_budget`` the model must emit ``<budget>k</budget>``
-    as its first action.
+    With require_budget the model declares <budget>k</budget> before
+    its first search. budget_template picks the wording.
+
+    Raises:
+        ValueError: If ``budget_template`` is unknown.
     """
+    if budget_template not in BUDGET_TEMPLATES:
+        raise ValueError(
+            f"Unknown budget_template {budget_template!r}; "
+            f"expected one of {BUDGET_TEMPLATES}"
+        )
     question = normalize_question(question)
+    if require_budget and budget_template == "minimal":
+        return (
+            "Answer the given question. "
+            "You must conduct reasoning inside <think> and </think> first every time you get new information. "
+            "Before your first search, declare your retrieval budget as <budget>k</budget>, "
+            f"where k is an integer in [0, {max_budget}]. "
+            "After reasoning, if you find you lack some knowledge, you can call a search engine by <search> query </search> "
+            "and it will return the top searched results between <information> and </information>. "
+            "You can search as many times as your want, up to your budget k. "
+            "If you find no further external knowledge needed, you can directly provide the answer inside <answer> and "
+            f"</answer>, without detailed illustrations. For example, <answer> Beijing </answer>. Question: {question}\n"
+        )
     if require_budget:
         return (
             "Answer the given question. First think inside <think> and </think> about what the question asks "
@@ -291,6 +317,7 @@ def make_rl_record(
     split: str,
     require_budget: bool,
     max_budget: int,
+    budget_template: str = "think_first",
 ) -> dict[str, Any]:
     """Return one RL parquet record.
 
@@ -298,7 +325,10 @@ def make_rl_record(
     carries gold_budget and gold_titles for the cap and grounding.
     """
     question = make_search_prefix(
-        example["question"], require_budget=require_budget, max_budget=max_budget
+        example["question"],
+        require_budget=require_budget,
+        max_budget=max_budget,
+        budget_template=budget_template,
     )
     answer = extract_answer(example)
     extra_info = {
@@ -370,6 +400,7 @@ def build_records(
     split: str,
     require_budget: bool,
     max_budget: int,
+    budget_template: str = "think_first",
 ) -> list[dict[str, Any]]:
     """Return RL records for every example in ``split``.
 
@@ -389,7 +420,9 @@ def build_records(
             if mode == "rl":
                 records.append(
                     make_rl_record(
-                        example, idx, data_source, split, require_budget, max_budget
+                        example, idx, data_source, split,
+                        require_budget, max_budget,
+                        budget_template=budget_template,
                     )
                 )
             else:
@@ -404,6 +437,11 @@ def main() -> None:
     parser.add_argument("--data_sources", default="hotpotqa,2wikimultihopqa")
     parser.add_argument("--mode", choices=SUPPORTED_MODES, default="rl")
     parser.add_argument("--require_budget", action="store_true")
+    parser.add_argument(
+        "--budget_template",
+        choices=BUDGET_TEMPLATES,
+        default="think_first",
+    )
     parser.add_argument("--max_budget", type=int, default=5)
     parser.add_argument("--train_split", default="train")
     parser.add_argument("--val_split", default="dev")
@@ -425,13 +463,17 @@ def main() -> None:
 
     os.makedirs(args.local_dir, exist_ok=True)
     train_records = build_records(
-        data_sources, args.mode, args.train_split, args.require_budget, args.max_budget
+        data_sources, args.mode, args.train_split,
+        args.require_budget, args.max_budget,
+        budget_template=args.budget_template,
     )
     train_records = cap_records_per_budget(
         train_records, args.max_train_per_budget, args.seed
     )
     val_records = build_records(
-        data_sources, args.mode, args.val_split, args.require_budget, args.max_budget
+        data_sources, args.mode, args.val_split,
+        args.require_budget, args.max_budget,
+        budget_template=args.budget_template,
     )
     import datasets
 
