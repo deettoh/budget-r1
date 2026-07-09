@@ -17,8 +17,7 @@ class ThesisDataTest(unittest.TestCase):
         self.assertEqual(thesis_qa.SUPPORTED_MODES, ("rl",))
 
     def test_make_search_prefix_requires_budget_before_search(self):
-        # think-first, reasoning precedes the declaration
-        # budget still binds before any search
+        # think-first, but the budget still binds before any search
         prefix = make_search_prefix(
             "Who wrote the book?", require_budget=True, max_budget=5
         )
@@ -149,8 +148,7 @@ class ExtractGoldTitlesMusiqueTest(unittest.TestCase):
 
 class BudgetTemplateTest(unittest.TestCase):
     def test_minimal_keeps_native_wording_plus_budget(self):
-        # probe template: native prompt + one budget sentence, so
-        # the frozen-floor delta isolates the declaration ask
+        # native prompt + one budget line, isolates the declaration ask
         prefix = make_search_prefix(
             "Who wrote the book?", require_budget=True,
             max_budget=5, budget_template="minimal",
@@ -186,6 +184,16 @@ class BudgetTemplateTest(unittest.TestCase):
         )
         self.assertIn("<budget>k</budget>", prefix)
         self.assertIn("rough plan", prefix)
+        self.assertIn("Question: Who wrote the book?", prefix)
+
+    def test_budget_first_declares_before_reasoning(self):
+        prefix = make_search_prefix(
+            "Who wrote the book?", require_budget=True,
+            max_budget=5, budget_template="budget_first",
+        )
+        self.assertIn("<budget>k</budget>", prefix)
+        self.assertIn("Before reasoning or searching", prefix)
+        self.assertNotIn("First think", prefix)
         self.assertIn("Question: Who wrote the book?", prefix)
 
     def test_unknown_template_raises(self):
@@ -262,10 +270,7 @@ class MakeRlRecordTest(unittest.TestCase):
         self.assertEqual(rec["extra_info"]["gold_budget"], 2)
 
     def test_gold_metadata_present_without_budget_prompt(self):
-        # changed 2026-07-06 for the §16 control parquet: gold
-        # metadata is always derived so the per-budget cap (and
-        # cost-only grounding) work on control-prompt data too
-        # require_budget now controls ONLY the prompt wording
+        # gold metadata always derived, require_budget picks wording
         rec = make_rl_record(
             self._example(), 0, "hotpotqa", "dev",
             require_budget=False, max_budget=5,

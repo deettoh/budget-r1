@@ -21,7 +21,9 @@ def normalize_question(question: str) -> str:
     return question
 
 
-BUDGET_TEMPLATES = ("think_first", "minimal", "reason_first", "soft")
+BUDGET_TEMPLATES = (
+    "think_first", "minimal", "reason_first", "soft", "budget_first",
+)
 
 
 def make_search_prefix(
@@ -66,6 +68,18 @@ def make_search_prefix(
             "Continue reasoning inside <think> and </think> after each result. You may search up to k times. "
             "When you have enough, provide the final answer inside <answer> and </answer>, without detailed "
             f"illustrations. For example, <answer> Beijing </answer>. Question: {question}\n"
+        )
+    if require_budget and budget_template == "budget_first":
+        return (
+            "Answer the given question. Before reasoning or searching, you must first output exactly one retrieval budget "
+            f"as <budget>k</budget>, where k is an integer in [0, {max_budget}]. "
+            "Use k as the maximum number of search calls needed. After the budget, "
+            "you must conduct reasoning inside <think> and </think> first every time you get new information. "
+            "If you find you lack some knowledge, you can call a search engine by <search> query </search>; "
+            "and it will return the top searched results between <information> and </information>. "
+            "You can search as many times as you want up to the budget k. "
+            "If you find no further external knowledge needed, you can directly provide the answer inside <answer> and "
+            f"</answer> without detailed illustrations. For example, <answer> Beijing </answer>. Question: {question}\n"
         )
     if require_budget and budget_template == "soft":
         return (
@@ -237,8 +251,7 @@ def extract_gold_titles(
         ):
             titles.add(str(paragraph["title"]))
 
-    # flashrag musique has no paragraphs field
-    # its only title signal is decomposition support_paragraph
+    # flashrag musique titles live only in the decomposition
     decomposition = example.get("question_decomposition") or metadata.get(
         "question_decomposition"
     )
