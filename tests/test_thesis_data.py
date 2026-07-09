@@ -170,6 +170,24 @@ class BudgetTemplateTest(unittest.TestCase):
         )
         self.assertIn("First think inside", prefix)
 
+    def test_reason_first_emphasizes_reasoning_before_budget(self):
+        prefix = make_search_prefix(
+            "Who wrote the book?", require_budget=True,
+            max_budget=5, budget_template="reason_first",
+        )
+        self.assertIn("<budget>k</budget>", prefix)
+        self.assertIn("think step by step", prefix)
+        self.assertIn("Question: Who wrote the book?", prefix)
+
+    def test_soft_frames_budget_as_optional_plan(self):
+        prefix = make_search_prefix(
+            "Who wrote the book?", require_budget=True,
+            max_budget=5, budget_template="soft",
+        )
+        self.assertIn("<budget>k</budget>", prefix)
+        self.assertIn("rough plan", prefix)
+        self.assertIn("Question: Who wrote the book?", prefix)
+
     def test_unknown_template_raises(self):
         with self.assertRaises(ValueError):
             make_search_prefix(

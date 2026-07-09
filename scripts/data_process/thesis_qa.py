@@ -21,7 +21,7 @@ def normalize_question(question: str) -> str:
     return question
 
 
-BUDGET_TEMPLATES = ("think_first", "minimal")
+BUDGET_TEMPLATES = ("think_first", "minimal", "reason_first", "soft")
 
 
 def make_search_prefix(
@@ -53,6 +53,29 @@ def make_search_prefix(
             "After reasoning, if you find you lack some knowledge, you can call a search engine by <search> query </search> "
             "and it will return the top searched results between <information> and </information>. "
             "You can search as many times as your want, up to your budget k. "
+            "If you find no further external knowledge needed, you can directly provide the answer inside <answer> and "
+            f"</answer>, without detailed illustrations. For example, <answer> Beijing </answer>. Question: {question}\n"
+        )
+    if require_budget and budget_template == "reason_first":
+        return (
+            "Answer the given question. First, think step by step inside <think> and </think> about what the "
+            "question is asking and what information you will need. Based on that reasoning, decide how many "
+            f"searches you will need and state it as <budget>k</budget>, an integer from 0 to {max_budget}. "
+            "Then, if you find you lack some knowledge, you can call a search engine by <search> query </search> "
+            "and it will return the top searched results between <information> and </information>. "
+            "Continue reasoning inside <think> and </think> after each result. You may search up to k times. "
+            "When you have enough, provide the final answer inside <answer> and </answer>, without detailed "
+            f"illustrations. For example, <answer> Beijing </answer>. Question: {question}\n"
+        )
+    if require_budget and budget_template == "soft":
+        return (
+            "Answer the given question. "
+            "You must conduct reasoning inside <think> and </think> first every time you get new information. "
+            "As a rough plan, first note about how many searches you expect to need as <budget>k</budget>, "
+            f"an integer from 0 to {max_budget}; this is just a guide. "
+            "If you find you lack some knowledge, you can call a search engine by <search> query </search> "
+            "and it will return the top searched results between <information> and </information>. "
+            "You can search as many times as needed, up to k. "
             "If you find no further external knowledge needed, you can directly provide the answer inside <answer> and "
             f"</answer>, without detailed illustrations. For example, <answer> Beijing </answer>. Question: {question}\n"
         )
