@@ -109,5 +109,19 @@ class NativeF1BySourceTest(unittest.TestCase):
         self.assertAlmostEqual(by_src["hotpotqa"], 0.3)
 
 
+class NativeF1OverallTest(unittest.TestCase):
+    def test_sample_weighted_not_average_of_source_means(self):
+        # 2 records at 0.5 mean, 1 at 0.3 -> weighted 1.3/3, not 0.4
+        native = [_rec(0.4, -1, source="2wikimultihopqa"),
+                  _rec(0.6, -1, source="2wikimultihopqa"),
+                  _rec(0.3, -1, source="hotpotqa")]
+        self.assertAlmostEqual(
+            diag.native_f1_overall(native), 1.3 / 3
+        )
+
+    def test_none_for_empty(self):
+        self.assertIsNone(diag.native_f1_overall([]))
+
+
 if __name__ == "__main__":
     unittest.main()

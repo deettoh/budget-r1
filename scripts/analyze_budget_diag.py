@@ -1,10 +1,7 @@
 """Item-1 frozen budget-prompt diagnostic over a val_only dump.
 
-Attributes the F1 gaps per data_source with 2Wiki broken out on two
-axes, format (well-formed rate, F1 well-formed vs malformed) and
-cap-behavioral (blocked-search on well-formed, declared-k dist, F1-vs-k).
-Pass --native_dump for the well-formed-vs-native F1 column. The
-optimization axis is training-time, pull it from wandb.
+Attributes per-source F1 gaps on two axes, format and cap behaviour.
+Pass --native_dump for the well-formed-vs-native F1 column.
 """
 
 import argparse
@@ -106,6 +103,17 @@ def native_f1_by_source(records: list) -> dict:
     }
 
 
+def native_f1_overall(records: list):
+    """Return sample-weighted native F1, or None when empty.
+
+    Weight by record, not by source. Averaging per-source means
+    misweights uneven splits.
+    """
+    if not records:
+        return None
+    return _mean([r["f1"] for r in records])
+
+
 def _fmt_opt(value, spec: str) -> str:
     """Format an optional float, or 'n/a' when it is None."""
     return "n/a".rjust(len(format(0.0, spec))) if value is None \
@@ -128,7 +136,9 @@ def _format_row(label: str, m: dict, native: float = None) -> str:
     )
 
 
-def _print_axis_table(records: list, native_by_src: dict) -> None:
+def _print_axis_table(
+    records: list, native_by_src: dict, native_overall=None
+) -> None:
     """Print the per-source format + cap-behavioral axis table."""
     header = (
         f"{'data_source':<20} {'n':>4} {'wfrate':>6} {'F1wf':>7} "
@@ -137,10 +147,7 @@ def _print_axis_table(records: list, native_by_src: dict) -> None:
     )
     print(header)
     print("-" * len(header))
-    overall_native = (
-        _mean(list(native_by_src.values())) if native_by_src else None
-    )
-    print(_format_row("OVERALL", compute_axes(records), overall_native))
+    print(_format_row("OVERALL", compute_axes(records), native_overall))
     for source, group in sorted(_by_source(records).items()):
         print(_format_row(
             source, compute_axes(group), native_by_src.get(source)
@@ -177,11 +184,14 @@ def main() -> None:
     with open(args.dump) as f:
         records = json.load(f)
     native_by_src = {}
+    native_overall = None
     if args.native_dump:
         with open(args.native_dump) as f:
-            native_by_src = native_f1_by_source(json.load(f))
+            native_records = json.load(f)
+        native_by_src = native_f1_by_source(native_records)
+        native_overall = native_f1_overall(native_records)
 
-    _print_axis_table(records, native_by_src)
+    _print_axis_table(records, native_by_src, native_overall)
     _print_k_tables(records)
 
     if not has_blocked_field(records):
