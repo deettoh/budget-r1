@@ -174,8 +174,7 @@ class RewardManager:
         already_print_data_sources = {}
         self.reset_metrics()
 
-        # gamma-curriculum, set while forcing is active
-        # so the unused-budget penalty is suppressed
+        # gamma-curriculum, suppress unused-budget penalty while forcing
         force_active = bool(data.meta_info.get("force_active", False))
 
         for i in range(len(data)):
@@ -219,6 +218,12 @@ class RewardManager:
             valid_search_calls = int(
                 self._scalar_batch_value(data_item, "valid_search_count", 0)
             )
+            # per-sample blocked-search splits cap-too-tight from format-broken
+            blocked_search_calls = int(
+                self._scalar_batch_value(
+                    data_item, "blocked_search_count", 0
+                )
+            )
             declared_budget_raw = self._scalar_batch_value(
                 data_item,
                 "declared_budget",
@@ -251,8 +256,7 @@ class RewardManager:
                         self.cost_reward_config["grounding"].get("lam", 0.0)
                     ) * gold_recall
                 if self._cost_in_advantage() > 0:
-                    # option a cost lives in the advantage z-score
-                    # alpha/beta zeroed, gamma/delta couplings kept
+                    # cost lives in the advantage z-score, alpha/beta zeroed
                     cost_cfg = replace(
                         self._budget_reward_config(force_active),
                         alpha=0.0,
@@ -285,6 +289,7 @@ class RewardManager:
                     "generated_tokens": int(generated_tokens),
                     "retrieved_tokens": int(retrieved_tokens),
                     "valid_search_calls": int(valid_search_calls),
+                    "blocked_search_calls": int(blocked_search_calls),
                     "declared_budget": int(declared_budget),
                     "gold_budget": (
                         int(gold_budget) if gold_budget is not None else -1
@@ -443,8 +448,7 @@ def main_task(config):
         Role.Critic: global_pool_id,
     }
 
-    # ref policy only feeds the training KL term
-    # val_only skips its model copy to free the shared 24gb gpu
+    # ref policy feeds only training KL, val_only skips its copy
     if not config.trainer.get("val_only", False):
         role_worker_mapping[Role.RefPolicy] = ray.remote(ActorRolloutRefWorker)
         mapping[Role.RefPolicy] = global_pool_id
