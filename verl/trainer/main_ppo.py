@@ -412,6 +412,8 @@ def _maybe_resume_adapter(config) -> None:
         return
     path, step = latest
     config.actor_rollout_ref.model.lora.adapter_path = path
+    # already warmed up in the first window, skip lr re-warmup
+    config.actor_rollout_ref.actor.optim.lr_warmup_steps_ratio = 0.0
     print(f"[resume] resuming adapter from {path} (step {step})")
 
 
