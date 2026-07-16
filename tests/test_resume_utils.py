@@ -4,7 +4,17 @@ import os
 import tempfile
 import unittest
 
-from search_r1.resume_utils import find_latest_checkpoint
+from search_r1.resume_utils import (
+    find_latest_checkpoint,
+    load_optimizer_state,
+    save_optimizer_state,
+)
+
+try:
+    import torch
+    _HAS_TORCH = True
+except ImportError:
+    _HAS_TORCH = False
 
 
 class FindLatestCheckpointTest(unittest.TestCase):
@@ -36,6 +46,51 @@ class FindLatestCheckpointTest(unittest.TestCase):
             path, step = find_latest_checkpoint(tmp)
             # the step_9 file is not a dir, so step_3 wins
             self.assertEqual(step, 3)
+
+
+@unittest.skipUnless(_HAS_TORCH, "torch not installed")
+class OptimizerStateRoundtripTest(unittest.TestCase):
+    def _stepped_optimizer(self):
+        param = torch.nn.Parameter(torch.ones(4))
+        opt = torch.optim.AdamW([param], lr=1e-3)
+        (param.pow(2).sum()).backward()
+        opt.step()
+        sched = torch.optim.lr_scheduler.LambdaLR(
+            opt, lr_lambda=lambda s: 1.0
+        )
+        sched.step()
+        return param, opt, sched
+
+    def test_restores_moments_and_scheduler_step(self):
+        param, opt, sched = self._stepped_optimizer()
+        with tempfile.TemporaryDirectory() as tmp:
+            save_optimizer_state(opt, sched, tmp)
+            param2 = torch.nn.Parameter(torch.ones(4))
+            opt2 = torch.optim.AdamW([param2], lr=1e-3)
+            sched2 = torch.optim.lr_scheduler.LambdaLR(
+                opt2, lr_lambda=lambda s: 1.0
+            )
+            loaded = load_optimizer_state(opt2, sched2, tmp)
+            self.assertTrue(loaded)
+            self.assertTrue(
+                torch.allclose(
+                    opt2.state[param2]["exp_avg"],
+                    opt.state[param]["exp_avg"],
+                )
+            )
+            self.assertEqual(sched2.last_epoch, sched.last_epoch)
+
+    def test_returns_false_when_no_optim_file(self):
+        _, opt, sched = self._stepped_optimizer()
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(load_optimizer_state(opt, sched, tmp))
+
+    def test_scheduler_optional_on_save(self):
+        _, opt, _ = self._stepped_optimizer()
+        with tempfile.TemporaryDirectory() as tmp:
+            save_optimizer_state(opt, None, tmp)
+            _, opt2, _ = self._stepped_optimizer()
+            self.assertTrue(load_optimizer_state(opt2, None, tmp))
 
 
 if __name__ == "__main__":

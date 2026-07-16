@@ -44,6 +44,10 @@ from search_r1.lora_utils import (
     resolve_adapter_path,
     strip_fsdp_prefix,
 )
+from search_r1.resume_utils import (
+    load_optimizer_state,
+    save_optimizer_state,
+)
 
 from codetiming import Timer
 
@@ -156,7 +160,7 @@ class ActorRolloutRefWorker(Worker):
         if should_wrap_lora:
             torch_dtype = torch.bfloat16
 
-        # QLoRA loads base in 4-bit nf4, quant_storage=bf16 lets fsdp flatten
+        # 4-bit nf4 base, quant_storage=bf16 lets fsdp flatten
         quant_4bit = bool(should_wrap_lora) and lora_config.get(
             'quant_4bit', False)
         bnb_config = None
@@ -214,7 +218,7 @@ class ActorRolloutRefWorker(Worker):
             from peft import LoraConfig, get_peft_model
             adapter_path = resolve_adapter_path(lora_config)
             if adapter_path is not None:
-                # resume adapters via plain load_state_dict (peft needs tf>=4.50)
+                # plain load_state_dict, peft needs tf>=4.50
                 from safetensors.torch import load_file
                 peft_config = LoraConfig.from_pretrained(adapter_path)
                 peft_config.inference_mode = False
@@ -224,7 +228,7 @@ class ActorRolloutRefWorker(Worker):
                     os.path.join(adapter_path, ADAPTER_WEIGHTS_FILE)))
                 load_result = actor_module.load_state_dict(
                     adapter_state, strict=False)
-                # missing_keys = frozen base (ok), unexpected key = failed rename
+                # missing_keys = frozen base, unexpected = bad rename
                 unexpected = list(load_result.unexpected_keys)
                 if unexpected:
                     raise RuntimeError(
@@ -360,6 +364,15 @@ class ActorRolloutRefWorker(Worker):
 
             actor_lr_scheduler = get_constant_schedule_with_warmup(optimizer=actor_optimizer,
                                                                    num_warmup_steps=num_warmup_steps)
+            # restore adam moments + scheduler step on resume, old
+            # checkpoints without it fall back to a fresh optimizer
+            if should_wrap_lora and adapter_path is not None:
+                restored = load_optimizer_state(
+                    actor_optimizer, actor_lr_scheduler, adapter_path
+                )
+                if restored and self.rank == 0:
+                    print(f'[resume] optimizer state restored from '
+                          f'{adapter_path}')
         else:
             actor_optimizer = None
             actor_lr_scheduler = None
@@ -669,6 +682,12 @@ class ActorRolloutRefWorker(Worker):
                 self.actor_module.peft_config['default'].save_pretrained(
                     local_path)
                 self.tokenizer.save_pretrained(local_path)
+                if self.actor_optimizer is not None:
+                    save_optimizer_state(
+                        self.actor_optimizer,
+                        self.actor_lr_scheduler,
+                        local_path,
+                    )
                 if hdfs_path is not None:
                     print(f'Uploading actor checkpoint to {hdfs_path}')
                     hdfs_io.makedirs(hdfs_path, exist_ok=True)
