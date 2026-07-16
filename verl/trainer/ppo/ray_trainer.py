@@ -50,6 +50,7 @@ import re
 import shutil
 from search_r1.budgeting import find_budget_digit_position
 from search_r1.llm_agent.generation import LLMGenerationManager, GenerationConfig
+from search_r1.resume_utils import find_latest_checkpoint
 from verl.utils.reward_score.qa_metrics import cost_efficiency_score
 
 WorkerType = Type[Worker]
@@ -1085,6 +1086,25 @@ class RayPPOTrainer(object):
         )
         metrics.update(global_balance_stats)
 
+    def _resume_global_step(self) -> int:
+        """Return the step to resume at, or 0 for a fresh run.
+
+        Warm restart. Weights load via lora.adapter_path in the actor
+        worker. Optimizer and scheduler restart fresh, so the constant
+        schedule re-warms briefly.
+        """
+        if not self.config.trainer.get("resume_from_latest", False):
+            return 0
+        actor_dir = os.path.join(
+            self.config.trainer.default_local_dir, "actor"
+        )
+        latest = find_latest_checkpoint(actor_dir)
+        if latest is None:
+            return 0
+        _, step = latest
+        print(f"[resume] continuing from global_step {step}")
+        return step
+
     def fit(self):
         """
         The training loop of PPO.
@@ -1093,7 +1113,7 @@ class RayPPOTrainer(object):
         """
 
         logger = self.logger
-        self.global_steps = 0
+        self.global_steps = self._resume_global_step()
         # perform validation before training
         # currently, we only support validation using the reward_function.
         if self.val_reward_fn is not None and self.config.trainer.get(

@@ -23,6 +23,8 @@ from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 import re
 from dataclasses import replace
 import numpy as np
+import os
+from search_r1.resume_utils import find_latest_checkpoint
 from search_r1.budgeting import (
     BudgetRewardConfig,
     compute_budget_reward,
@@ -390,6 +392,29 @@ def _send_training_alert(config, title: str, text: str, level: str) -> None:
         print(f"[wandb-alert] could not send alert: {exc}")
 
 
+def _maybe_resume_adapter(config) -> None:
+    """Point lora.adapter_path at the latest checkpoint to resume.
+
+    No-op unless trainer.resume_from_latest is set. Skips when an
+    adapter_path is already configured so an explicit resume wins.
+    """
+    if not config.trainer.get("resume_from_latest", False):
+        return
+    lora = config.actor_rollout_ref.model.get("lora", None)
+    if lora is not None and lora.get("adapter_path", None):
+        return
+    actor_dir = os.path.join(
+        config.trainer.default_local_dir, "actor"
+    )
+    latest = find_latest_checkpoint(actor_dir)
+    if latest is None:
+        print("[resume] no checkpoint found, starting fresh")
+        return
+    path, step = latest
+    config.actor_rollout_ref.model.lora.adapter_path = path
+    print(f"[resume] resuming adapter from {path} (step {step})")
+
+
 @ray.remote
 def main_task(config):
     from verl.utils.fs import copy_local_path_from_hdfs
@@ -403,6 +428,8 @@ def main_task(config):
         OmegaConf.to_container(config, resolve=True)
     )  # resolve=True will eval symbol values
     OmegaConf.resolve(config)
+
+    _maybe_resume_adapter(config)
 
     # env_class = ENV_CLASS_MAPPING[config.env.name]
 

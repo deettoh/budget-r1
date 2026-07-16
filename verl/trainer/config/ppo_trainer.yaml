@@ -222,6 +222,7 @@ trainer:
   default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}
   val_do_sample: false  # sample val, false = greedy
   best_by_calibration: false  # best ckpt by calibration
+  resume_from_latest: false  # warm-restart from latest global_step_N
 
 max_turns: 10
 do_search: true
