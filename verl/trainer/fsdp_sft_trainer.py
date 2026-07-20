@@ -112,7 +112,8 @@ class FSDPSFTTrainer(object):
                                         response_key=config.data.response_key,
                                         response_dict_keys=config.data.get('response_dict_keys', None),
                                         max_length=config.data.max_length,
-                                        truncation=config.data.truncation)
+                                        truncation=config.data.truncation,
+                                        mask_information_spans=config.data.get('mask_information_spans', False))
         self.val_dataset = SFTDataset(parquet_files=config.data.val_files,
                                       tokenizer=self.tokenizer,
                                       prompt_key=config.data.prompt_key,
@@ -120,7 +121,8 @@ class FSDPSFTTrainer(object):
                                       response_key=config.data.response_key,
                                       response_dict_keys=config.data.get('response_dict_keys', None),
                                       max_length=config.data.max_length,
-                                      truncation=config.data.truncation)
+                                      truncation=config.data.truncation,
+                                      mask_information_spans=config.data.get('mask_information_spans', False))
 
         # build dataloader
         rank = self.device_mesh.get_rank()
@@ -170,9 +172,14 @@ class FSDPSFTTrainer(object):
         init_context = get_init_weight_context_manager(use_meta_tensor=not config.tie_word_embeddings)
 
         with init_context():
+            # bf16 default, fp32 is invalid with flash_attention_2
+            # and the frozen LoRA base needs no full precision
+            load_dtype = getattr(
+                torch, self.config.model.get('load_dtype', 'bfloat16')
+            )
             self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(local_model_path,
                                                                                config=config,
-                                                                               torch_dtype=torch.float32,
+                                                                               torch_dtype=load_dtype,
                                                                                attn_implementation='flash_attention_2',
                                                                                trust_remote_code=trust_remote_code)
             if self.config.model.get('lora_rank', 0) > 0:

@@ -9,8 +9,10 @@ data:
   truncation: error
   balance_dp_token: False
   chat_template: null
+  mask_information_spans: False  # zero <information> spans in loss
 model:
   partial_pretrain: ~/models/gemma-1.1-7b-it
+  load_dtype: bfloat16  # fp32 is invalid with flash_attention_2
   fsdp_config:
     wrap_policy:
       min_num_params: 0
