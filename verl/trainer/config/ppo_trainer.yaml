@@ -223,6 +223,7 @@ trainer:
   val_do_sample: false  # sample val, false = greedy
   best_by_calibration: false  # best ckpt by calibration
   resume_from_latest: false  # warm-restart from latest global_step_N
+  dump_val_text: false  # add trace text + index to val_only dump for sft
 
 max_turns: 10
 do_search: true

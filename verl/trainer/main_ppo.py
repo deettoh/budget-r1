@@ -54,12 +54,15 @@ class RewardManager:
     """The reward manager."""
 
     def __init__(
-        self, tokenizer, num_examine, format_score=0.0, cost_reward_config=None
+        self, tokenizer, num_examine, format_score=0.0,
+        cost_reward_config=None, dump_val_text=False
     ) -> None:
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.format_score = format_score
         self.cost_reward_config = cost_reward_config
+        # dump_val_text adds trace text + index for SFT self-distillation
+        self.dump_val_text = dump_val_text
         self.last_metrics: list[dict] = []
 
     def reset_metrics(self) -> None:
@@ -282,27 +285,35 @@ class RewardManager:
 
             reward_tensor[i, valid_response_length - 1] = score
 
-            self.last_metrics.append(
-                {
-                    "data_source": str(data_source),
-                    "em": float(qa["em"]),
-                    "f1": float(qa["f1"]),
-                    "has_answer": bool(qa["has_answer"]),
-                    "generated_tokens": int(generated_tokens),
-                    "retrieved_tokens": int(retrieved_tokens),
-                    "valid_search_calls": int(valid_search_calls),
-                    "blocked_search_calls": int(blocked_search_calls),
-                    "declared_budget": int(declared_budget),
-                    "gold_budget": (
-                        int(gold_budget) if gold_budget is not None else -1
-                    ),
-                    "reward": float(score),
-                    "answer_score": float(answer_score),
-                    "answer_reward": float(answer_reward),
-                    "gold_recall": float(gold_recall),
-                    "grounding_reward": float(grounding_reward),
-                }
-            )
+            entry = {
+                "data_source": str(data_source),
+                "em": float(qa["em"]),
+                "f1": float(qa["f1"]),
+                "has_answer": bool(qa["has_answer"]),
+                "generated_tokens": int(generated_tokens),
+                "retrieved_tokens": int(retrieved_tokens),
+                "valid_search_calls": int(valid_search_calls),
+                "blocked_search_calls": int(blocked_search_calls),
+                "declared_budget": int(declared_budget),
+                "gold_budget": (
+                    int(gold_budget) if gold_budget is not None else -1
+                ),
+                "reward": float(score),
+                "answer_score": float(answer_score),
+                "answer_reward": float(answer_reward),
+                "gold_recall": float(gold_recall),
+                "grounding_reward": float(grounding_reward),
+            }
+            if self.dump_val_text:
+                extra = data_item.non_tensor_batch.get("extra_info")
+                entry["sequences_str"] = sequences_str
+                entry["index"] = (
+                    int(extra["index"])
+                    if isinstance(extra, dict)
+                    and extra.get("index") is not None
+                    else -1
+                )
+            self.last_metrics.append(entry)
 
             if data_source not in already_print_data_sources:
                 already_print_data_sources[data_source] = 0
@@ -504,7 +515,9 @@ def main_task(config):
 
     # Note that we always use function-based RM for validation
     val_reward_fn = RewardManager(
-        tokenizer=tokenizer, num_examine=1, cost_reward_config=config.cost_reward
+        tokenizer=tokenizer, num_examine=1,
+        cost_reward_config=config.cost_reward,
+        dump_val_text=config.trainer.get("dump_val_text", False),
     )
 
     resource_pool_manager = ResourcePoolManager(
