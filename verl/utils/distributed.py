@@ -31,6 +31,12 @@ def initialize_global_process_group(timeout_second=36000):
         os.environ.setdefault("RANK", os.environ["SLURM_PROCID"])
         os.environ.setdefault("LOCAL_RANK", os.environ.get("SLURM_LOCALID", "0"))
         os.environ.setdefault("WORLD_SIZE", os.environ.get("SLURM_NTASKS", "1"))
+    # single-process fallback for bare `python` sft launch (no srun)
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+    os.environ.setdefault("MASTER_PORT", "29500")
+    os.environ.setdefault("RANK", "0")
+    os.environ.setdefault("LOCAL_RANK", "0")
+    os.environ.setdefault("WORLD_SIZE", "1")
     torch.distributed.init_process_group(
         "nccl", timeout=timedelta(seconds=timeout_second)
     )
