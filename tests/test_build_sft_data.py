@@ -14,7 +14,8 @@ bsd = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(bsd)
 
 
-def _trace(question, response, calls=2, em=1.0, source="2wikimultihopqa"):
+def _trace(question, response, calls=2, em=1.0, source="2wikimultihopqa",
+           gold=2):
     prompt = (
         f"<|im_start|>user\nAnswer the question. Question: {question}\n"
         "<|im_end|>\n"
@@ -25,6 +26,7 @@ def _trace(question, response, calls=2, em=1.0, source="2wikimultihopqa"):
         "em": em,
         "valid_search_calls": calls,
         "data_source": source,
+        "gold_budget": gold,
     }
 
 
@@ -92,6 +94,46 @@ class BuildRowsTest(unittest.TestCase):
     def test_missing_sequences_str_raises(self):
         with self.assertRaises(ValueError):
             bsd.build_rows([{"em": 1.0, "valid_search_calls": 1}])
+
+
+class GoldBudgetLabelTest(unittest.TestCase):
+    def test_gold_label_used_in_tag(self):
+        # trace searched 2 but gold says 4: gold mode declares 4
+        records = [_trace("Q?", "<answer>x</answer>", calls=2, gold=4)]
+        treatment, _ = bsd.build_rows(records, budget_label="gold")
+        self.assertTrue(
+            treatment[0]["response"].startswith("<budget>4</budget>\n")
+        )
+
+    def test_default_mode_still_uses_calls(self):
+        records = [_trace("Q?", "<answer>x</answer>", calls=2, gold=4)]
+        treatment, _ = bsd.build_rows(records)
+        self.assertTrue(
+            treatment[0]["response"].startswith("<budget>2</budget>\n")
+        )
+
+    def test_gold_clamped_to_max(self):
+        records = [_trace("Q?", "<answer>x</answer>", gold=9)]
+        treatment, _ = bsd.build_rows(records, budget_label="gold")
+        self.assertTrue(
+            treatment[0]["response"].startswith("<budget>5</budget>\n")
+        )
+
+    def test_gold_missing_raises(self):
+        rec = _trace("Q?", "<answer>x</answer>")
+        del rec["gold_budget"]
+        with self.assertRaises(ValueError):
+            bsd.build_rows([rec], budget_label="gold")
+
+    def test_gold_negative_raises(self):
+        records = [_trace("Q?", "<answer>x</answer>", gold=-1)]
+        with self.assertRaises(ValueError):
+            bsd.build_rows(records, budget_label="gold")
+
+    def test_unknown_label_mode_raises(self):
+        records = [_trace("Q?", "<answer>x</answer>")]
+        with self.assertRaises(ValueError):
+            bsd.build_rows(records, budget_label="bogus")
 
 
 class SplitTrainValTest(unittest.TestCase):

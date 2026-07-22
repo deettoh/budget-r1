@@ -80,11 +80,37 @@ def treatment_response(k: int, response: str) -> str:
     return f"<budget>{k}</budget>\n{response}"
 
 
-def build_rows(records: list) -> tuple[list, list]:
+def _resolve_budget(rec: dict, budget_label: str) -> int:
+    """Return the k to declare for one record under budget_label.
+
+    used = the trace's own search count, gold = extra-info gold
+    budget. gold fails loud on a missing or negative value so a bad
+    dump cannot silently produce mislabeled data.
+
+    Raises:
+        ValueError: On unknown budget_label or unusable gold_budget.
+    """
+    if budget_label == "used":
+        return clamp_budget(rec.get("valid_search_calls", 0))
+    if budget_label == "gold":
+        gold = rec.get("gold_budget")
+        if gold is None or int(gold) < 0:
+            raise ValueError(
+                "budget_label=gold needs a non-negative gold_budget "
+                "on every kept record"
+            )
+        return max(1, clamp_budget(int(gold)))
+    raise ValueError(f"unknown budget_label {budget_label!r}")
+
+
+def build_rows(
+    records: list, budget_label: str = "used"
+) -> tuple[list, list]:
     """Return (treatment_rows, control_rows) from EM-correct traces.
 
     Raises:
-        ValueError: If a kept record lacks sequences_str.
+        ValueError: If a kept record lacks sequences_str or a usable
+            budget for ``budget_label``.
     """
     treatment, control = [], []
     for rec in records:
@@ -101,7 +127,7 @@ def build_rows(records: list) -> tuple[list, list]:
         question = extract_question(prompt_part)
         response = clean_response(response_part)
         source = rec.get("data_source", "unknown")
-        k = clamp_budget(rec.get("valid_search_calls", 0))
+        k = _resolve_budget(rec, budget_label)
         treatment.append({
             "prompt": make_search_prefix(
                 question, require_budget=True, max_budget=MAX_BUDGET,
@@ -148,12 +174,16 @@ def main() -> None:
     parser.add_argument("--trace_dump", required=True)
     parser.add_argument("--budgetfirst_dir", default="data/sft_budgetfirst")
     parser.add_argument("--native_dir", default="data/sft_native")
+    parser.add_argument(
+        "--budget_label", choices=("used", "gold"), default="used",
+        help="declared k source: trace search count or gold_budget",
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
     with open(args.trace_dump) as f:
         records = json.load(f)
-    treatment, control = build_rows(records)
+    treatment, control = build_rows(records, budget_label=args.budget_label)
     if not treatment:
         raise ValueError("no EM-correct traces to build SFT data")
 
