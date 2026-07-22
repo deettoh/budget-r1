@@ -61,7 +61,7 @@ class RewardManager:
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.format_score = format_score
         self.cost_reward_config = cost_reward_config
-        # dump_val_text adds trace text + index for SFT self-distillation
+        # dump_val_text adds trace text + index for SFT distill
         self.dump_val_text = dump_val_text
         self.last_metrics: list[dict] = []
 
@@ -223,7 +223,7 @@ class RewardManager:
             valid_search_calls = int(
                 self._scalar_batch_value(data_item, "valid_search_count", 0)
             )
-            # per-sample blocked-search splits cap-too-tight from format-broken
+            # blocked-search splits cap-too-tight from bad format
             blocked_search_calls = int(
                 self._scalar_batch_value(
                     data_item, "blocked_search_count", 0
@@ -261,7 +261,7 @@ class RewardManager:
                         self.cost_reward_config["grounding"].get("lam", 0.0)
                     ) * gold_recall
                 if self._cost_in_advantage() > 0:
-                    # cost lives in the advantage z-score, alpha/beta zeroed
+                    # cost moves to the advantage, alpha/beta zeroed
                     cost_cfg = replace(
                         self._budget_reward_config(force_active),
                         alpha=0.0,
@@ -376,10 +376,12 @@ def main(config):
 
         # this is for local ray cluster.
         # keep Ray's object store off /dev/shm which HPC restricts
+        # raise the disk spill guard so a shared /tmp at 95% wont SIGBUS
         ray.init(
             address="local",
             object_store_memory=4 * 1024 ** 3,
             _plasma_directory="/tmp",
+            _system_config={"local_fs_capacity_threshold": 0.99},
         )
 
     ray.get(main_task.remote(config))
