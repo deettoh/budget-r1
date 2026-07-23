@@ -1,11 +1,11 @@
 """Build SFT parquets from frozen-native trace dumps.
 
 Self-distillation: keep EM-correct native rollouts, then emit two
-symmetric arms. Treatment carries the budget_first prompt with a
-declared <budget>k</budget> (k = the trace's own search count) so the
-declaration matches the behavior that follows. Control keeps the native
-prompt and response verbatim. The same train/val partition feeds both
-arms so a question lands in the same split on each side.
+symmetric arms. Treatment carries a budget prompt with a declared
+<budget>k</budget> spliced into the trace: budget_first prepends it,
+think_first places it after the pre-search reasoning. Control keeps
+the native prompt and response verbatim. The same train/val partition
+feeds both arms so a question lands in the same split on each side.
 """
 
 import argparse
@@ -25,6 +25,7 @@ make_search_prefix = thesis_qa.make_search_prefix
 
 MAX_BUDGET = 5
 VAL_FRACTION = 0.05
+SFT_BUDGET_TEMPLATES = ("budget_first", "think_first")
 ASSISTANT_MARKER = "<|im_start|>assistant\n"
 _QUESTION_RE = re.compile(
     r"Question:\s*(.*?)\s*(?:<\|im_end\|>|$)", re.DOTALL
@@ -75,9 +76,43 @@ def clamp_budget(calls: int, max_budget: int = MAX_BUDGET) -> int:
     return max(0, min(int(calls), max_budget))
 
 
-def treatment_response(k: int, response: str) -> str:
-    """Prepend the declared budget tag to a native response."""
-    return f"<budget>{k}</budget>\n{response}"
+def treatment_response(
+    k: int, response: str, budget_template: str = "budget_first"
+) -> str:
+    """Return the trace response with <budget>k</budget> spliced in.
+
+    budget_first prepends the tag. think_first inserts it after the
+    pre-search reasoning, before the first action tag.
+
+    Raises:
+        ValueError: On unknown template, or for think_first when the
+            response has neither a <search> nor an <answer> tag.
+    """
+    if budget_template == "budget_first":
+        return f"<budget>{k}</budget>\n{response}"
+    if budget_template == "think_first":
+        # frozen native traces reason in bare prose (no <think> tags)
+        # so declare at the first action tag, after the reasoning
+        positions = [
+            pos for pos in (
+                response.find(tag) for tag in ("<search>", "<answer>")
+            )
+            if pos != -1
+        ]
+        if not positions:
+            raise ValueError(
+                "think_first splice needs a <search> or <answer> tag "
+                "in the trace response"
+            )
+        first_action = min(positions)
+        return (
+            f"{response[:first_action]}<budget>{k}</budget>\n"
+            f"{response[first_action:]}"
+        )
+    raise ValueError(
+        f"unknown budget_template {budget_template!r}; "
+        f"expected one of {SFT_BUDGET_TEMPLATES}"
+    )
 
 
 def _resolve_budget(rec: dict, budget_label: str) -> int:
@@ -103,15 +138,55 @@ def _resolve_budget(rec: dict, budget_label: str) -> int:
     raise ValueError(f"unknown budget_label {budget_label!r}")
 
 
+def balance_records(
+    records: list, budget_label: str, cap: int, seed: int
+) -> list:
+    """Return EM-correct records capped per (source, budget) group.
+
+    Seeded shuffle per group picks the survivors, original order is
+    kept (mirrors cap_records_per_budget). Non-positive cap is a
+    no-op. Non-EM-correct records are dropped when the cap is active
+    because their budget label is meaningless.
+    """
+    if cap <= 0:
+        return records
+
+    by_group: dict = {}
+    for position, rec in enumerate(records):
+        if float(rec.get("em", 0.0)) != 1.0:
+            continue
+        key = (
+            rec.get("data_source", "unknown"),
+            _resolve_budget(rec, budget_label),
+        )
+        by_group.setdefault(key, []).append(position)
+
+    keep: set = set()
+    for key in sorted(by_group, key=str):
+        positions = list(by_group[key])
+        random.Random(f"{seed}:{key[0]}:{key[1]}").shuffle(positions)
+        keep.update(positions[:cap])
+
+    return [rec for i, rec in enumerate(records) if i in keep]
+
+
 def build_rows(
-    records: list, budget_label: str = "used"
+    records: list,
+    budget_label: str = "used",
+    budget_template: str = "budget_first",
 ) -> tuple[list, list]:
     """Return (treatment_rows, control_rows) from EM-correct traces.
 
     Raises:
-        ValueError: If a kept record lacks sequences_str or a usable
-            budget for ``budget_label``.
+        ValueError: On unknown budget_template, or if a kept record
+            lacks sequences_str or a usable budget for
+            ``budget_label``.
     """
+    if budget_template not in SFT_BUDGET_TEMPLATES:
+        raise ValueError(
+            f"unknown budget_template {budget_template!r}; "
+            f"expected one of {SFT_BUDGET_TEMPLATES}"
+        )
     treatment, control = [], []
     for rec in records:
         if float(rec.get("em", 0.0)) != 1.0:
@@ -131,9 +206,11 @@ def build_rows(
         treatment.append({
             "prompt": make_search_prefix(
                 question, require_budget=True, max_budget=MAX_BUDGET,
-                budget_template="budget_first",
+                budget_template=budget_template,
             ),
-            "response": treatment_response(k, response),
+            "response": treatment_response(
+                k, response, budget_template=budget_template
+            ),
             "data_source": source,
         })
         control.append({
@@ -178,12 +255,28 @@ def main() -> None:
         "--budget_label", choices=("used", "gold"), default="used",
         help="declared k source: trace search count or gold_budget",
     )
+    parser.add_argument(
+        "--budget_template", choices=SFT_BUDGET_TEMPLATES,
+        default="budget_first",
+        help="declaration placement: prepend or after reasoning",
+    )
+    parser.add_argument(
+        "--balance_budget", type=int, default=0,
+        help="cap kept traces per (source, k) group; 0 = off",
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
     with open(args.trace_dump) as f:
         records = json.load(f)
-    treatment, control = build_rows(records, budget_label=args.budget_label)
+    records = balance_records(
+        records, args.budget_label, args.balance_budget, args.seed
+    )
+    treatment, control = build_rows(
+        records,
+        budget_label=args.budget_label,
+        budget_template=args.budget_template,
+    )
     if not treatment:
         raise ValueError("no EM-correct traces to build SFT data")
 
