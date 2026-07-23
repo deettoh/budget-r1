@@ -257,6 +257,82 @@ class BalanceRecordsTest(unittest.TestCase):
         )
 
 
+class FilterEmCorrectTest(unittest.TestCase):
+    def test_keeps_only_em_correct(self):
+        records = [
+            _trace("Q1?", "<answer>a</answer>", em=1.0),
+            _trace("Q2?", "<answer>b</answer>", em=0.0),
+        ]
+        kept = bsd.filter_em_correct(records)
+        self.assertEqual(len(kept), 1)
+        self.assertIn("Q1?", kept[0]["sequences_str"])
+
+
+class UpsampleRecordsTest(unittest.TestCase):
+    def _records(self):
+        rows = []
+        for i in range(5):
+            rows.append(_trace(f"W{i}?", "<answer>a</answer>",
+                               source="2wikimultihopqa", gold=2))
+        for i in range(2):
+            rows.append(_trace(f"X{i}?", "<answer>b</answer>",
+                               source="2wikimultihopqa", gold=4))
+        rows.append(_trace("H0?", "<answer>c</answer>",
+                           source="hotpotqa", gold=2))
+        return rows
+
+    def _counts(self, records):
+        counts = {}
+        for rec in records:
+            key = (rec["data_source"], rec["gold_budget"])
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    def test_upsamples_minority_to_source_majority(self):
+        out = bsd.upsample_records(
+            self._records(), budget_label="gold", max_factor=4, seed=1
+        )
+        counts = self._counts(out)
+        self.assertEqual(counts[("2wikimultihopqa", 2)], 5)
+        self.assertEqual(counts[("2wikimultihopqa", 4)], 5)
+        self.assertEqual(counts[("hotpotqa", 2)], 1)
+
+    def test_max_factor_caps_duplication(self):
+        out = bsd.upsample_records(
+            self._records(), budget_label="gold", max_factor=2, seed=1
+        )
+        counts = self._counts(out)
+        self.assertEqual(counts[("2wikimultihopqa", 4)], 4)
+
+    def test_originals_precede_duplicates(self):
+        records = self._records()
+        out = bsd.upsample_records(
+            records, budget_label="gold", max_factor=4, seed=1
+        )
+        self.assertEqual(out[: len(records)], records)
+
+    def test_nonpositive_factor_is_noop(self):
+        records = self._records()
+        self.assertEqual(
+            bsd.upsample_records(
+                records, budget_label="gold", max_factor=0, seed=1
+            ),
+            records,
+        )
+
+    def test_deterministic_for_seed(self):
+        first = bsd.upsample_records(
+            self._records(), budget_label="gold", max_factor=4, seed=9
+        )
+        second = bsd.upsample_records(
+            self._records(), budget_label="gold", max_factor=4, seed=9
+        )
+        self.assertEqual(
+            [r["sequences_str"] for r in first],
+            [r["sequences_str"] for r in second],
+        )
+
+
 class SplitTrainValTest(unittest.TestCase):
     def test_holds_out_val_fraction(self):
         train, val = bsd.split_train_val(100, seed=1)

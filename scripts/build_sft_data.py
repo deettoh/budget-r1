@@ -1,11 +1,9 @@
 """Build SFT parquets from frozen-native trace dumps.
 
-Self-distillation: keep EM-correct native rollouts, then emit two
-symmetric arms. Treatment carries a budget prompt with a declared
-<budget>k</budget> spliced into the trace: budget_first prepends it,
-think_first places it after the pre-search reasoning. Control keeps
-the native prompt and response verbatim. The same train/val partition
-feeds both arms so a question lands in the same split on each side.
+Keeps EM-correct rollouts and emits two symmetric arms. Treatment
+splices a declared <budget>k</budget> into the trace, control keeps the
+native response verbatim. Both arms share one train/val partition so a
+question lands in the same split on each side.
 """
 
 import argparse
@@ -91,8 +89,7 @@ def treatment_response(
     if budget_template == "budget_first":
         return f"<budget>{k}</budget>\n{response}"
     if budget_template == "think_first":
-        # frozen native traces reason in bare prose (no <think> tags)
-        # so declare at the first action tag, after the reasoning
+        # native traces have no <think> tags, declare at first action
         positions = [
             pos for pos in (
                 response.find(tag) for tag in ("<search>", "<answer>")
@@ -138,15 +135,59 @@ def _resolve_budget(rec: dict, budget_label: str) -> int:
     raise ValueError(f"unknown budget_label {budget_label!r}")
 
 
+def filter_em_correct(records: list) -> list:
+    """Return only the EM-correct trace records, order kept."""
+    return [
+        rec for rec in records if float(rec.get("em", 0.0)) == 1.0
+    ]
+
+
+def upsample_records(
+    records: list, budget_label: str, max_factor: int, seed: int
+) -> list:
+    """Return records with minority (source, k) groups duplicated.
+
+    Smaller budget groups are duplicated toward the source's largest,
+    capped at max_factor times their own size. Train partition only,
+    so duplicates never straddle the val split.
+    """
+    if max_factor <= 0:
+        return records
+
+    by_source: dict = {}
+    for position, rec in enumerate(records):
+        source = rec.get("data_source", "unknown")
+        k = _resolve_budget(rec, budget_label)
+        by_source.setdefault(source, {}).setdefault(k, []).append(
+            position
+        )
+
+    out = list(records)
+    for source in sorted(by_source):
+        groups = by_source[source]
+        majority = max(len(v) for v in groups.values())
+        for k in sorted(groups):
+            positions = groups[k]
+            target = min(majority, len(positions) * max_factor)
+            extra = target - len(positions)
+            if extra <= 0:
+                continue
+            pool = list(positions)
+            random.Random(f"{seed}:{source}:{k}").shuffle(pool)
+            out.extend(
+                records[pool[i % len(pool)]] for i in range(extra)
+            )
+    return out
+
+
 def balance_records(
     records: list, budget_label: str, cap: int, seed: int
 ) -> list:
     """Return EM-correct records capped per (source, budget) group.
 
-    Seeded shuffle per group picks the survivors, original order is
-    kept (mirrors cap_records_per_budget). Non-positive cap is a
-    no-op. Non-EM-correct records are dropped when the cap is active
-    because their budget label is meaningless.
+    Seeded per-group shuffle picks survivors, original order kept.
+    Non-EM-correct records are dropped when the cap is active because
+    their budget label is meaningless.
     """
     if cap <= 0:
         return records
@@ -264,40 +305,57 @@ def main() -> None:
         "--balance_budget", type=int, default=0,
         help="cap kept traces per (source, k) group; 0 = off",
     )
+    parser.add_argument(
+        "--upsample_budget", type=int, default=0,
+        help="duplicate minority (source, k) train rows toward the "
+             "source majority, at most this factor; 0 = off",
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
+    if args.balance_budget > 0 and args.upsample_budget > 0:
+        raise ValueError(
+            "use --balance_budget or --upsample_budget, not both"
+        )
 
     with open(args.trace_dump) as f:
         records = json.load(f)
+    records = filter_em_correct(records)
+    if not records:
+        raise ValueError("no EM-correct traces to build SFT data")
     records = balance_records(
         records, args.budget_label, args.balance_budget, args.seed
     )
-    treatment, control = build_rows(
-        records,
-        budget_label=args.budget_label,
-        budget_template=args.budget_template,
+
+    print(f"[sft] kept {len(records)} EM-correct traces")
+
+    # split before upsampling so duplicates never cross the val split
+    train_idx, val_idx = split_train_val(len(records), args.seed)
+    train_records = [records[i] for i in train_idx]
+    val_records = [records[i] for i in val_idx]
+    train_records = upsample_records(
+        train_records, args.budget_label, args.upsample_budget,
+        args.seed,
     )
-    if not treatment:
-        raise ValueError("no EM-correct traces to build SFT data")
 
-    print(f"[sft] kept {len(treatment)} EM-correct traces")
-    print(f"[sft] per-source: {_per_source_counts(treatment)}")
-
-    train_idx, val_idx = split_train_val(len(treatment), args.seed)
-    for rows, out_dir in (
-        (treatment, args.budgetfirst_dir),
-        (control, args.native_dir),
+    for split_records, filename in (
+        (train_records, "train.parquet"),
+        (val_records, "test.parquet"),
     ):
+        treatment, control = build_rows(
+            split_records,
+            budget_label=args.budget_label,
+            budget_template=args.budget_template,
+        )
+        print(f"[sft] {filename} per-source: "
+              f"{_per_source_counts(treatment)}")
         _write_parquet(
-            [rows[i] for i in train_idx],
-            os.path.join(out_dir, "train.parquet"),
+            treatment, os.path.join(args.budgetfirst_dir, filename)
         )
         _write_parquet(
-            [rows[i] for i in val_idx],
-            os.path.join(out_dir, "test.parquet"),
+            control, os.path.join(args.native_dir, filename)
         )
-        print(f"[sft] wrote {out_dir} "
-              f"(train {len(train_idx)}, val {len(val_idx)})")
+    print(f"[sft] wrote {args.budgetfirst_dir} and {args.native_dir} "
+          f"(train {len(train_records)}, val {len(val_records)})")
 
 
 if __name__ == "__main__":
