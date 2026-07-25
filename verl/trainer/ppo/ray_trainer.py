@@ -102,7 +102,8 @@ class ResourcePoolManager:
 import torch
 from verl.utils.torch_functional import masked_mean
 
-# ces alone can pick degenerate ckpts (ttc masks f1)
+# non-f1 selection can pick degenerate ckpts
+# so veto a best update that drops f1 below this ratio
 BEST_CES_F1_GUARD_RATIO = 0.9
 
 
@@ -550,7 +551,7 @@ class RayPPOTrainer(object):
 
         reward_tensor_lst = []
         data_source_lst = []
-        # RewardManager resets last_metrics each call, so accumulate per-batch
+        # RewardManager resets last_metrics, so accumulate here
         val_per_sample = []
 
         gen_config = GenerationConfig(
@@ -604,7 +605,7 @@ class RayPPOTrainer(object):
                     "eos_token_id": self.tokenizer.eos_token_id,
                     "pad_token_id": self.tokenizer.pad_token_id,
                     "recompute_log_prob": False,
-                    # val_do_sample switches greedy val to sampling for diagnostics
+                    # val_do_sample makes val sample, for diagnostics
                     "do_sample": bool(
                         self.config.trainer.get("val_do_sample", False)
                     ),
@@ -652,7 +653,7 @@ class RayPPOTrainer(object):
                     "eos_token_id": self.tokenizer.eos_token_id,
                     "pad_token_id": self.tokenizer.pad_token_id,
                     "recompute_log_prob": False,
-                    # val_do_sample switches greedy val to sampling for diagnostics
+                    # val_do_sample makes val sample, for diagnostics
                     "do_sample": bool(
                         self.config.trainer.get("val_do_sample", False)
                     ),
@@ -777,7 +778,7 @@ class RayPPOTrainer(object):
                         float(np.mean(bucket["budget_calibration"]))
                     )
 
-        # val_only dumps per-sample metrics, gated so training is identical
+        # val_only dumps per-sample metrics, training unaffected
         if self.config.trainer.get("val_only", False) and per_sample:
             import json
             import os
@@ -915,12 +916,13 @@ class RayPPOTrainer(object):
     def _best_metric_key(self):
         """Pick the best-checkpoint metric, all higher-is-better.
 
-        calibration -> budget_calibration, cost on -> ces, else f1.
+        F1 for every condition so cells stay comparable; a run opts
+        into calibration selection explicitly.
         """
+        # cost_reward.enabled used to switch this to ces
+        # which made the selection metric differ per cell
         if self.config.trainer.get("best_by_calibration", False):
             return "val/budget_calibration/all"
-        if getattr(self.config.cost_reward, "enabled", False):
-            return "val/ces/all"
         return "val/f1/all"
 
     def _budget_digit_token_ids(self):
@@ -1259,7 +1261,7 @@ class RayPPOTrainer(object):
                         )
                         batch = batch.union(final_gen_batch_output)
 
-                    # budget-CE targets ride the tensor batch to survive the reorder
+                    # CE targets ride the tensor batch, veRL reorders
                     self._attach_budget_ce_targets(batch)
 
                     ####################
@@ -1303,7 +1305,7 @@ class RayPPOTrainer(object):
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
                             batch = batch.union(reward_tensor)
 
-                        # gamma-curriculum, reward manager zeroes unused-budget gamma
+                        # gamma-curriculum, manager zeroes it here
                         batch.meta_info["force_active"] = force_active
                         # we combine with rule-based rm
                         reward_tensor = self.reward_fn(batch)
@@ -1402,7 +1404,7 @@ class RayPPOTrainer(object):
                         pprint(f"Final validation metrics: {val_metrics}")
                         logger.log(data=val_metrics, step=self.global_steps)
                         self._maybe_save_best_checkpoint(val_metrics)
-                    # increment runs before this check, so save misses final weights
+                    # increment precedes this, else save misses the end
                     if (
                         self.config.trainer.save_freq > 0
                         and (self.global_steps - 1)
