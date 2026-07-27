@@ -17,15 +17,15 @@ from scripts.gold_recall_probe import (
 
 class ExtractGoldTitlesTest(unittest.TestCase):
     def test_hotpot_supporting_fact_pairs(self):
-        example = {
-            "supporting_facts": [["Title A", 0], ["Title B", 2], ["Title A", 1]]
-        }
+        facts = [["Title A", 0], ["Title B", 2], ["Title A", 1]]
+        example = {"supporting_facts": facts}
         self.assertEqual(
             extract_gold_titles(example, "hotpotqa"), ["Title A", "Title B"]
         )
 
     def test_columnar_dict_shape(self):
-        example = {"supporting_facts": {"title": ["X", "Y"], "sent_id": [0, 1]}}
+        facts = {"title": ["X", "Y"], "sent_id": [0, 1]}
+        example = {"supporting_facts": facts}
         self.assertEqual(
             extract_gold_titles(example, "2wikimultihopqa"), ["X", "Y"]
         )

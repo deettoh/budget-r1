@@ -25,7 +25,7 @@ def read_api_key(key_file: str) -> str:
         sys.exit(
             f"[wandb-setup] FAIL: {path} does not exist.\n"
             "Create it interactively on the HPC (no `export`, no `chmod`):\n"
-            "    nano ~/.wandb_key      # paste key from https://wandb.ai/authorize, save\n"
+            "    nano ~/.wandb_key  # paste from wandb.ai/authorize, save\n"
             "Then re-run this script. It will tighten the file permissions "
             "for you via os.chmod()."
         )
@@ -43,10 +43,10 @@ def read_api_key(key_file: str) -> str:
         current_mode = path.stat().st_mode & 0o777
         if current_mode != 0o600:
             os.chmod(path, 0o600)
-            print(f"[wandb-setup] os.chmod({path}, 0o600) (was {oct(current_mode)}).")
+            print(f"[wandb-setup] chmod {path} 0o600 was {oct(current_mode)}")
     except OSError as exc:
         # non-fatal the key still works just less private
-        print(f"[wandb-setup] WARN: could not tighten {path} permissions: {exc}")
+        print(f"[wandb-setup] WARN: chmod {path} failed: {exc}")
 
     return key
 
@@ -58,7 +58,7 @@ def confirm_netrc_written() -> None:
     contents = netrc_path.read_text()
     if "api.wandb.ai" not in contents:
         sys.exit(
-            "[wandb-setup] FAIL: ~/.netrc exists but has no api.wandb.ai entry. "
+            "[wandb-setup] FAIL: ~/.netrc has no api.wandb.ai entry. "
             "Re-check the API key."
         )
     print(f"[wandb-setup] OK: ~/.netrc has api.wandb.ai entry ({netrc_path}).")
@@ -69,7 +69,7 @@ def main() -> None:
     parser.add_argument(
         "--key-file",
         default=DEFAULT_KEY_FILE,
-        help=f"Path to file containing the wandb API key (default: {DEFAULT_KEY_FILE})",
+        help=f"File holding the wandb API key (default: {DEFAULT_KEY_FILE})",
     )
     parser.add_argument(
         "--project",
@@ -97,12 +97,12 @@ def main() -> None:
     confirm_netrc_written()
 
     if args.skip_test_run:
-        print("[wandb-setup] --skip-test-run passed; not starting a wandb.init() run.")
+        print("[wandb-setup] --skip-test-run passed, no smoke run.")
         return
 
     run_name = "wandb-smoke-" + dt.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     print(
-        f"[wandb-setup] starting smoke run '{run_name}' in project '{args.project}'..."
+        f"[wandb-setup] smoke run '{run_name}' in '{args.project}'"
     )
     run = wandb.init(
         project=args.project,

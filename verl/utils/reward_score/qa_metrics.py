@@ -61,7 +61,7 @@ def em_score(prediction: str, golden_answers) -> float:
     return 0.0
 
 
-def _f1_against_single_gold(pred_tokens: list[str], gold_tokens: list[str]) -> float:
+def _f1_single_gold(pred_tokens: list[str], gold_tokens: list[str]) -> float:
     """Return token-overlap F1 against one gold answer.
 
     SQuAD empty-input convention, 1.0 only when both sides are empty.
@@ -83,7 +83,7 @@ def f1_score(prediction: str, golden_answers) -> float:
     best = 0.0
     for gold in _as_gold_list(golden_answers):
         gold_tokens = normalize_answer(gold).split()
-        score = _f1_against_single_gold(pred_tokens, gold_tokens)
+        score = _f1_single_gold(pred_tokens, gold_tokens)
         if score > best:
             best = score
     return best

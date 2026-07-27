@@ -22,11 +22,12 @@ from search_r1.budgeting import (
 class BudgetingTest(unittest.TestCase):
     def test_parse_budget_declaration_accepts_bounded_integer(self):
         self.assertEqual(parse_budget_declaration("<budget>3</budget>"), 3)
-        self.assertEqual(parse_budget_declaration("  <budget> 0 </budget>\n"), 0)
+        padded = "  <budget> 0 </budget>\n"
+        self.assertEqual(parse_budget_declaration(padded), 0)
         self.assertEqual(parse_budget_declaration("<budget>5</budget>"), 5)
 
-    def test_parse_budget_declaration_rejects_missing_or_out_of_range_budget(self):
-        self.assertIsNone(parse_budget_declaration("<think>search first</think>"))
+    def test_parse_budget_declaration_rejects_missing_or_out_of_range(self):
+        self.assertIsNone(parse_budget_declaration("<think>search</think>"))
         self.assertIsNone(parse_budget_declaration("<budget>6</budget>"))
         self.assertIsNone(parse_budget_declaration("<budget>two</budget>"))
 
@@ -46,7 +47,7 @@ class BudgetingTest(unittest.TestCase):
         self.assertEqual(parts["token_penalty"], 0.11)
         self.assertEqual(parts["unused_budget_penalty"], 0.01)
 
-    def test_compute_budget_reward_does_not_penalize_under_declaration_directly(self):
+    def test_compute_budget_reward_ignores_under_declaration(self):
         score, parts = compute_budget_reward(
             answer_score=0.0,
             valid_search_calls=3,

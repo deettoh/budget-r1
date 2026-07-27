@@ -13,13 +13,15 @@ import unittest
 
 # import directly, verl/__init__ drags in numpy/torch
 _HERE = pathlib.Path(__file__).resolve().parent
-_QA_METRICS_PATH = _HERE.parent / "verl" / "utils" / "reward_score" / "qa_metrics.py"
+_SCORE_DIR = _HERE.parent / "verl" / "utils" / "reward_score"
+_QA_METRICS_PATH = _SCORE_DIR / "qa_metrics.py"
 _spec = importlib.util.spec_from_file_location("qa_metrics", _QA_METRICS_PATH)
 qa_metrics = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(qa_metrics)
 
 
-_PROMPT_EXAMPLE = "<answer> Beijing </answer>"  # mirrors the literal example in the rollout prompt
+# mirrors the literal example in the rollout prompt
+_PROMPT_EXAMPLE = "<answer> Beijing </answer>"
 
 
 def _wrap(answer: str) -> str:
@@ -45,7 +47,8 @@ class ExtractSolutionTest(unittest.TestCase):
 
     def test_returns_none_when_only_prompt_example(self):
         # only the example <answer> tag, no real model answer
-        self.assertIsNone(qa_metrics.extract_solution(f"... {_PROMPT_EXAMPLE} ..."))
+        text = f"... {_PROMPT_EXAMPLE} ..."
+        self.assertIsNone(qa_metrics.extract_solution(text))
 
     def test_returns_none_when_no_answer_tag(self):
         self.assertIsNone(qa_metrics.extract_solution("no tags here"))
@@ -61,7 +64,8 @@ class EmScoreTest(unittest.TestCase):
         self.assertEqual(qa_metrics.em_score("Paris", "London"), 0.0)
 
     def test_accepts_dict_ground_truth(self):
-        self.assertEqual(qa_metrics.em_score("Paris", {"target": ["paris", "lyon"]}), 1.0)
+        gold = {"target": ["paris", "lyon"]}
+        self.assertEqual(qa_metrics.em_score("Paris", gold), 1.0)
 
 
 class F1ScoreTest(unittest.TestCase):
@@ -90,7 +94,8 @@ class ComputeQaMetricsTest(unittest.TestCase):
         self.assertEqual(result, {"em": 0.0, "f1": 0.0, "has_answer": False})
 
     def test_returns_em_and_f1_when_answer_present(self):
-        result = qa_metrics.compute_qa_metrics(_wrap("Paris"), {"target": "paris"})
+        gold = {"target": "paris"}
+        result = qa_metrics.compute_qa_metrics(_wrap("Paris"), gold)
         self.assertEqual(result["has_answer"], True)
         self.assertEqual(result["em"], 1.0)
         self.assertAlmostEqual(result["f1"], 1.0)
@@ -99,7 +104,8 @@ class ComputeQaMetricsTest(unittest.TestCase):
 class CesTest(unittest.TestCase):
     def test_ces_formula(self):
         # CES = F1*1000/TTC, here 0.5*1000/1000 = 0.5
-        self.assertAlmostEqual(qa_metrics.cost_efficiency_score(0.5, 1000), 0.5)
+        ces = qa_metrics.cost_efficiency_score(0.5, 1000)
+        self.assertAlmostEqual(ces, 0.5)
 
     def test_ces_zero_ttc_returns_zero(self):
         self.assertEqual(qa_metrics.cost_efficiency_score(0.9, 0), 0.0)

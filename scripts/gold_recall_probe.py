@@ -2,8 +2,8 @@
 
 Measures gold recall@k under an oracle query (tier A, is the passage
 reachable) and the question (tier B), swept over --topks. Low A means
-corpus-limited, high A low B query-limited, both high generation-limited.
-Retriever and index pass only, no training or rollout.
+corpus-limited, high A with low B query-limited, both high means
+generation-limited. Retriever and index pass only, no training.
 """
 
 import argparse
@@ -195,7 +195,9 @@ def main() -> None:
         "--oracle_query", default="title", choices=["title", "passage"]
     )
     parser.add_argument("--index_path", default="retrieval_data/e5_IVF.index")
-    parser.add_argument("--corpus_path", default="retrieval_data/wiki-18.jsonl")
+    parser.add_argument(
+        "--corpus_path", default="retrieval_data/wiki-18.jsonl"
+    )
     parser.add_argument("--retriever_name", default="e5")
     parser.add_argument("--retriever_model", default="intfloat/e5-base-v2")
     parser.add_argument("--faiss_gpu", action="store_true")

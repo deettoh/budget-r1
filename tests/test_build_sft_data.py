@@ -43,10 +43,8 @@ class SplitAndExtractTest(unittest.TestCase):
             bsd.split_prompt_response("no marker here")
 
     def test_extract_question(self):
-        self.assertEqual(
-            bsd.extract_question("blah Question: Who wrote Hamlet?\n<|im_end|>"),
-            "Who wrote Hamlet?",
-        )
+        raw = "blah Question: Who wrote Hamlet?\n<|im_end|>"
+        self.assertEqual(bsd.extract_question(raw), "Who wrote Hamlet?")
 
     def test_extract_question_missing_raises(self):
         with self.assertRaises(ValueError):

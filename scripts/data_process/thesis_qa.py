@@ -159,7 +159,9 @@ def _titles_from_supporting_facts(supporting_facts: Any) -> set[str]:
                 titles.add(str(fact[0]))
             elif isinstance(fact, dict):
                 title = (
-                    fact.get("title") or fact.get("page") or fact.get("paragraph_id")
+                    fact.get("title")
+                    or fact.get("page")
+                    or fact.get("paragraph_id")
                 )
                 if title is not None:
                     titles.add(str(title))
@@ -216,7 +218,7 @@ def derive_gold_budget(example: dict[str, Any], data_source: str) -> int:
 
     raise ValueError(
         f"Could not derive gold budget for data_source={data_source!r}: "
-        "no supporting_facts, supporting paragraphs, or question decomposition "
+        "no supporting_facts, paragraphs, or question decomposition "
         f"found. top-level keys={sorted(example.keys())}, "
         f"metadata keys={sorted(metadata.keys())}"
     )
@@ -450,7 +452,7 @@ def build_records(
         if split not in dataset:
             available = list(dataset.keys())
             raise ValueError(
-                f"Split '{split}' not found for dataset '{data_source}'. Available splits: {available}"
+                f"Split '{split}' not in '{data_source}'. Have: {available}"
             )
         for idx, example in enumerate(dataset[split]):
             if mode == "rl":
@@ -491,7 +493,7 @@ def main() -> None:
     args = parser.parse_args()
 
     data_sources = [
-        source.strip() for source in args.data_sources.split(",") if source.strip()
+        name.strip() for name in args.data_sources.split(",") if name.strip()
     ]
     unsupported = sorted(set(data_sources) - set(SUPPORTED_DATASETS))
     if unsupported:

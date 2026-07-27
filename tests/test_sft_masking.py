@@ -32,7 +32,8 @@ class FindSubsequenceTest(unittest.TestCase):
 class InformationSpanFlagsTest(unittest.TestCase):
     def test_no_markers_keeps_all(self):
         ids = [1, 2, 3, 4]
-        self.assertEqual(information_span_flags(ids, OPEN, CLOSE), [1, 1, 1, 1])
+        flags = information_span_flags(ids, OPEN, CLOSE)
+        self.assertEqual(flags, [1, 1, 1, 1])
 
     def test_single_span_masked_inclusive(self):
         ids = [1, 90, 91, 5, 92, 93, 8]
