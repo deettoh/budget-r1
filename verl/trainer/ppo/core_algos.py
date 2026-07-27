@@ -108,7 +108,9 @@ def compute_gae_advantage_return(token_level_rewards: torch.Tensor, values: torc
 
 
 # NOTE(sgm): this implementation only consider outcome supervision, where the reward is a scalar.
-def _group_zscore(values, index, epsilon):
+def _group_zscore(
+    values: torch.Tensor, index: torch.Tensor, epsilon: float
+) -> torch.Tensor:
     """Return per-sample within-group z-scores.
 
     Mirrors GRPO's own score normalization so the cost term is scaled
@@ -182,7 +184,7 @@ def compute_grpo_outcome_advantage(token_level_rewards: torch.Tensor,
             scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
         if cost is not None and cost_coeff > 0:
             cost_z = _group_zscore(cost.float(), index, epsilon)
-            # gate cost on reward>0 so all-fail groups give no cheaper-gradient
+            # gate on reward>0, all-fail groups get no cost signal
             cost_z = cost_z * (raw_scores > 0).to(cost_z.dtype)
             scores = scores - cost_coeff * cost_z
         scores = scores.unsqueeze(-1).tile([1, response_length]) * eos_mask
