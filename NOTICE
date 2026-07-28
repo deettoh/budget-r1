@@ -1,0 +1,75 @@
+Budget-Aware Agentic Retrieval-Augmented Generation
+Copyright 2026 Jay Hu
+
+This product includes software developed by third parties, listed below.
+The entire work is distributed under the Apache License, Version 2.0.
+See the LICENSE file for the full terms.
+
+================================================================
+Third-party components
+================================================================
+
+veRL (Volcano Engine Reinforcement Learning for LLM)
+Copyright 2024 Bytedance Ltd. and/or its affiliates
+Licensed under the Apache License, Version 2.0
+https://github.com/volcengine/verl
+
+    Vendored under verl/. Supplies the GRPO and PPO trainers, the
+    distributed worker and sharding layer, and the Hydra config system.
+
+Search-R1
+Copyright the Search-R1 authors (Jin et al., 2025)
+Licensed under the Apache License, Version 2.0
+https://github.com/PeterGriffinJin/Search-R1
+
+    Vendored under search_r1/, scripts/data_process/nq*.py,
+    scripts/qa_search_*_merge.py, example/, and the upstream
+    train_ppo.sh and train_grpo.sh. Supplies the agentic retrieval
+    rollout, the retriever server, and the reward baseline.
+
+================================================================
+Modifications
+================================================================
+
+Per section 4(b) of the Apache License, the following files were
+modified from their upstream form. Everything else vendored under
+verl/ and search_r1/ is unchanged.
+
+Modified from veRL:
+
+    verl/trainer/main_ppo.py               budget-aware reward manager
+    verl/trainer/ppo/ray_trainer.py        budget metrics, F1 checkpoint
+                                           selection, val dumping
+    verl/trainer/ppo/core_algos.py         group-normalised cost in the
+                                           GRPO advantage
+    verl/trainer/config/ppo_trainer.yaml   budget_planner and
+                                           cost_reward config blocks
+    verl/trainer/config/sft_trainer.yaml   information-span masking
+    verl/trainer/fsdp_sft_trainer.py       LoRA and span-masked SFT
+    verl/workers/actor/dp_actor.py         budget cross-entropy term,
+                                           budget-excluded KL
+    verl/workers/fsdp_workers.py           4-bit QLoRA base loading
+    verl/workers/sharding_manager/fsdp_vllm.py  dequantised merge
+    verl/utils/dataset/sft_dataset.py      SFT dataset with loss masking
+    verl/utils/dataset/__init__.py         export the SFT dataset
+    verl/utils/distributed.py              Slurm to PyTorch env bridge
+    verl/utils/reward_score/qa_metrics.py  F1 and cost-efficiency score
+    verl/utils/torch_functional.py         chunked log-prob computation
+    verl/utils/tracking.py                 logger backend handling
+
+Modified from Search-R1:
+
+    search_r1/llm_agent/generation.py      budget parsing and hard cap
+                                           enforcement in the rollout
+    search_r1/search/retrieval_server.py   local index configuration
+
+New files authored for this work:
+
+    search_r1/budgeting.py                 reward equation and parsers
+    search_r1/sft_masking.py               SFT response-span masking
+    search_r1/lora_utils.py                QLoRA adapter resolution
+    search_r1/resume_utils.py              warm restart from checkpoint
+    scripts/data_process/thesis_qa.py      dataset builder
+    scripts/build_sft_data.py              SFT trace distillation
+    scripts/paired_significance.py         paired significance testing
+    and the remaining scripts/ and tests/ files not listed above.

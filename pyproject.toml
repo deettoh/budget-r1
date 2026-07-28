@@ -18,14 +18,16 @@ name = "verl"
 # The actual version is specified in the [tool.setuptools.dynamic] section below.
 dynamic = ["version"]
 
-description = "veRL: Volcano Engine Reinforcement Learning for LLM"
+description = "Budget-aware agentic RAG, built on Search-R1 and veRL"
 license = {file = "LICENSE"}  # or "Apache-2.0", if you prefer an SPDX identifier
 readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.8"
 
+# The distribution keeps the name "verl" because the installable package
+# is the vendored veRL tree, imported as `verl`. Upstream authorship is
+# recorded in NOTICE.
 authors = [
-  { name = "Bytedance - Seed - MLSys", email = "zhangchi.usc1992@bytedance.com" },
-  { name = "Bytedance - Seed - MLSys", email = "gmsheng@connect.hku.hk" },
+  { name = "Jay Hu" },
 ]
 
 # Dependencies corresponding to install_requires in setup.py
