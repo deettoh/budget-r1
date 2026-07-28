@@ -1,16 +1,17 @@
 # Budget-Aware Agentic Retrieval-Augmented Generation: Reinforcement Learning of Self-Declared Search Budgets for Cost-Efficient Multi-hop Question Answering
 
-An agentic retrieval-augmented generation system that learns to plan its own
-retrieval budget. The model declares `<budget>k</budget>` as its first action,
-the rollout environment enforces `k` as a hard cap on retrieval calls, and a
-cost-aware GRPO objective trains that declaration to track question
-difficulty. The work extends [Search-R1](SEARCH_R1_README.md), Jin et al. 2025,
-on the vendored [veRL](VERL_README.md) trainer.
+A reinforcement learning framework that trains an agentic retrieval-augmented
+generation policy to plan its own retrieval budget. The model declares
+`<budget>k</budget>` as its first action, the rollout environment enforces `k`
+as a hard cap on retrieval calls, and a cost-aware GRPO objective trains that
+declaration to track question difficulty. The work extends
+[Search-R1](SEARCH_R1_README.md), Jin et al. 2025, on the vendored
+[veRL](VERL_README.md) trainer.
 
 This is my final year project for a B.Eng in Artificial Intelligence, and it
 remains a work in progress, so the repository will keep changing.
 
-On 1024 held-out multi-hop questions the system improves answer F1 over the
+On 1024 held-out multi-hop questions the framework improves answer F1 over the
 Search-R1 baseline (*.341* against *.324*) while issuing *7%* fewer retrieval
 calls and spending *8%* fewer tokens.
 
@@ -102,20 +103,20 @@ two mechanisms rather than the warm start.
 
 ### Objective
 
-`N` is the number of retrieval calls a rollout made, `k` is the budget it
-declared, `T` is its total token count, and `recall` is the fraction of gold
-passages its retrievals returned. The scalar reward is
+The scalar reward is
 
 ```
 R = R_answer + λ·recall
-    − α·N − β·T
     − γ·max(0, k − N)
     − δ·max(0, k_gold − k)
 ```
 
-implemented in `search_r1/budgeting.py`. The last two terms tie the declaration
-to behaviour, since one charges for budget declared and left unused and the
-other for declaring below the question's gold budget.
+implemented in `search_r1/budgeting.py`, where `R_answer` is the answer reward,
+`N` is the number of retrieval calls a rollout made, `k` is the budget it
+declared, `k_gold` is the question's reference budget, and `recall` is the
+fraction of gold passages its retrievals returned. Both penalties tie the
+declaration to behaviour, since one charges for budget declared and left unused
+and the other for declaring below the question's gold budget.
 
 The retrieval cost is group-normalised and subtracted from the GRPO advantage.
 For rollout `i` in group `g`,
@@ -126,26 +127,28 @@ For rollout `i` in group `g`,
 z_g(x) = (x − μ_g) / (σ_g + ε)
 ```
 
-implemented in `verl/trainer/ppo/core_algos.py`. Normalising within the group
+implemented in `verl/trainer/ppo/core_algos.py`, where `Â_i` is the advantage
+of rollout `i`, `z_g` is the z-score across its group with mean `μ_g` and
+standard deviation `σ_g`, `ε` prevents division by zero when a group has no
+variance, and `1[·]` is the indicator function. Normalising within the group
 charges a rollout for being costlier than its siblings on the same question
 rather than for its absolute call count, so a question that genuinely needs
 more hops is not penalised for taking them. The indicator acts as a gate, so a
 group in which no rollout earned positive reward contributes no cost-only
 gradient, which prevents the policy from learning to stop searching entirely.
 
-The headline configuration uses these values.
+The proposed framework uses these values.
 
 | term | meaning | value |
 |---|---|---|
-| α | per retrieval call | 0 |
-| β | per token | 0 |
 | γ | declared budget left unused | .02 |
 | δ | declared below gold budget | .06 |
 | λ | gold-passage grounding | .5 |
 | c | cost weight in the advantage | .5 |
 
 The declared digit also carries an auxiliary cross-entropy loss toward the gold
-budget, weighted .05. Each ablation cell zeroes one of these coefficients.
+budget, weighted .05. Each ablation cell disables one mechanism, listed in
+`train_grpo_budget.sh`.
 
 ## Repository structure
 
@@ -155,7 +158,7 @@ Hydra config system, and the files below are the thesis contribution.
 ```
 Search-R1/
 ├── search_r1/
-│   ├── budgeting.py              reward equation, single source of truth
+│   ├── budgeting.py              reward equation
 │   ├── sft_masking.py            SFT loss mask over response spans
 │   ├── lora_utils.py             QLoRA adapter resolution
 │   ├── resume_utils.py           warm restart from the latest checkpoint
@@ -173,7 +176,7 @@ Search-R1/
 ├── tests/                        unit tests for the above
 ├── prepare_data.sh               builds both RL parquets
 ├── train_sft.sh                  self-distillation warm start
-├── train_grpo_budget.sh          proposed system
+├── train_grpo_budget.sh          proposed framework
 ├── train_grpo_control.sh         matched control
 └── eval_greedy.sh                evaluation, writes the per-question dump
 ```
@@ -275,7 +278,7 @@ by the later checkpoint.
 - Budget calibration is a property of the sampled declaration distribution,
   since greedy decoding takes the modal declaration, which collapses to 2 on
   most questions and hides the grading. The correlation above is therefore
-  measured under sampling while the headline quality and cost figures are
+  measured under sampling while the reported quality and cost figures are
   greedy.
 - The declared budget is supervised by a cross-entropy term at the digit
   position, not by the scalar reward alone, because a scalar penalty moves
@@ -294,7 +297,7 @@ by the later checkpoint.
   adds reasoning tokens to the total. Cross-format cost claims
   lead with MRC, which counts retrieval actions and is prompt-invariant.
 - Part of the margin over the matched control comes from the control degrading
-  through over-retrieval rather than from the proposed system improving.
+  through over-retrieval rather than from the proposed framework improving.
 - Results are for a single 3B model family at 4-bit quantization. The 4-bit base
   costs about *.029* F1 against bf16.
 
