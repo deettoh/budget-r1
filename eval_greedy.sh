@@ -61,8 +61,6 @@ python -m verl.trainer.main_ppo \
     budget_planner.max_budget=5 \
     budget_planner.forced_exec.enabled=false \
     cost_reward.enabled=true \
-    cost_reward.alpha=0.05 \
-    cost_reward.beta=0.0001 \
     cost_reward.gamma=0.02 \
     cost_reward.delta=0.06 \
     cost_reward.answer_metric=em \

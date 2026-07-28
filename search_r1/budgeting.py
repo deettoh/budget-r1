@@ -1,7 +1,8 @@
-"""Thesis cost-penalized GRPO reward, single source of truth.
+"""Thesis budget reward.
 
-R = R_answer + lam*G - alpha*N - beta*T - gamma*max(0, k-N)
-- delta*max(0, gold_k-k), G is gold-passage grounding recall.
+R = R_answer + lam*G - gamma*max(0, k-N) - delta*max(0, gold_k-k),
+where G is gold-passage grounding recall. The per-call retrieval
+cost is subtracted from the GRPO advantage in ``core_algos``.
 """
 
 import re
@@ -56,15 +57,27 @@ def compute_grounding_reward(
 
 @dataclass(frozen=True)
 class BudgetRewardConfig:
-    """Frozen reward coefficients, ``gamma < alpha`` enforced upstream.
+    """Frozen declaration-coupling coefficients.
 
-    delta weights the under-declaration floor, default 0 is baseline.
+    gamma charges budget declared and left unused, delta charges
+    declaring below the gold budget.
     """
 
-    alpha: float = 0.05
-    beta: float = 0.0001
     gamma: float = 0.01
     delta: float = 0.0
+
+
+def validate_cost_reward_config(config: Optional[dict]) -> None:
+    """Raise if the cost reward is on but charges no retrieval cost."""
+    cfg = config or {}
+    if not cfg.get("enabled", False):
+        return
+    if float(cfg.get("cost_in_advantage", 0.0)) <= 0:
+        raise ValueError(
+            "cost_reward.enabled=true requires "
+            "cost_reward.cost_in_advantage>0, the per-call cost is "
+            "applied only in the GRPO advantage"
+        )
 
 
 def parse_budget_declaration(text: str, max_budget: int = 5) -> Optional[int]:
@@ -89,7 +102,7 @@ def find_budget_digit_position(
 ) -> Optional[int]:
     """Return the index of the declared digit inside the budget span.
 
-    Feeds the budget-CE aux loss. None when the span holds no digit.
+    Used by the budget-CE aux loss. None when the span has no digit.
     """
     digit_set = set(digit_token_ids)
     for position, (token, masked) in enumerate(
@@ -124,7 +137,7 @@ def build_budget_mask(
 def select_answer_reward(em: float, f1: float, metric: str = "em") -> float:
     """Return the answer reward under metric em, f1, or em_f1.
 
-    em is baseline parity, f1 credits partial gains, em_f1 averages.
+    em keeps parity with the Search-R1 baseline.
     """
     if metric == "em":
         return float(em)
@@ -143,7 +156,7 @@ def should_force_search(
 ) -> bool:
     """Return True if an early answer must be blocked to force search.
 
-    Bootstrap scaffolding. Force target is max(declared, min_searches).
+    Bootstrap scaffolding, off in every reported run.
     """
     target = max(declared_budget if declared_budget >= 0 else 0, min_searches)
     return force_active and target >= 1 and search_count < target
@@ -160,8 +173,6 @@ def curriculum_gamma(base_gamma: float, force_active: bool) -> float:
 def compute_budget_reward(
     answer_score: float,
     valid_search_calls: int,
-    generated_tokens: int,
-    retrieved_tokens: int,
     declared_budget: int,
     config: BudgetRewardConfig,
     gold_budget: Optional[int] = None,
@@ -169,12 +180,9 @@ def compute_budget_reward(
 ) -> tuple[float, dict[str, float]]:
     """Return ``(score, parts)`` for one rollout.
 
-    parts carries each component for logging. The declaration floor
-    applies only when gold_budget is given.
+    parts contains each component for logging. The under-declaration
+    penalty applies only when gold_budget is given.
     """
-    total_tokens = generated_tokens + retrieved_tokens
-    retrieval_penalty = config.alpha * valid_search_calls
-    token_penalty = config.beta * total_tokens
     unused_budget_penalty = config.gamma * max(
         0, declared_budget - valid_search_calls
     )
@@ -186,8 +194,6 @@ def compute_budget_reward(
     score = (
         answer_score
         + grounding_reward
-        - retrieval_penalty
-        - token_penalty
         - unused_budget_penalty
         - under_declaration_penalty
     )
@@ -195,9 +201,6 @@ def compute_budget_reward(
     return score, {
         "answer": answer_score,
         "grounding_reward": grounding_reward,
-        "retrieval_penalty": retrieval_penalty,
-        "token_penalty": token_penalty,
         "unused_budget_penalty": unused_budget_penalty,
         "under_declaration_penalty": under_declaration_penalty,
-        "total_tokens": total_tokens,
     }

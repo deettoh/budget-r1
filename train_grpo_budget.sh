@@ -7,13 +7,14 @@
 # The proposed system, and the configuration behind the reported
 # numbers. Coefficients and equations are in the README.
 #
-# alpha and beta below are inert, cost_in_advantage>0 zeroes both.
-#
 # Ablations are single-flag edits from here:
 #   cost_reward.enabled=false                  budget mechanism only
-#   budget_planner.enabled=false               cost mechanism only
 #   actor_rollout_ref.actor.budget_ce_coeff=0  no declaration supervision
 #   drop lora.adapter_path                     no SFT warm start
+#
+# The cost-only cell needs gamma=0 delta=0 alongside
+# budget_planner.enabled=false, both couple to a declaration it never
+# makes and would otherwise score against the k=5 fallback.
 #
 # Configure per run: adapter_path, experiment_name, default_local_dir.
 
@@ -72,8 +73,6 @@ python -m verl.trainer.main_ppo \
     budget_planner.max_budget=5 \
     budget_planner.forced_exec.enabled=false \
     cost_reward.enabled=true \
-    cost_reward.alpha=0.05 \
-    cost_reward.beta=0.0001 \
     cost_reward.gamma=0.02 \
     cost_reward.delta=0.06 \
     cost_reward.answer_metric=em \

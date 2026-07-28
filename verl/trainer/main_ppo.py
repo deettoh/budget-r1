@@ -21,7 +21,6 @@ from verl.utils.reward_score import qa_em
 from verl.utils.reward_score import qa_metrics
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 import re
-from dataclasses import replace
 import numpy as np
 import os
 from search_r1.resume_utils import find_latest_checkpoint
@@ -32,6 +31,7 @@ from search_r1.budgeting import (
     parse_retrieved_titles,
     select_answer_reward,
     title_recall,
+    validate_cost_reward_config,
 )
 
 
@@ -64,6 +64,7 @@ class RewardManager:
         # dump_val_text adds trace text + index for SFT distill
         self.dump_val_text = dump_val_text
         self.last_metrics: list[dict] = []
+        validate_cost_reward_config(cost_reward_config)
 
     def reset_metrics(self) -> None:
         """Clear ``last_metrics`` before a fresh batch is scored."""
@@ -84,8 +85,6 @@ class RewardManager:
         force_active zeroes gamma during forcing, else base coefficient.
         """
         return BudgetRewardConfig(
-            alpha=float(self.cost_reward_config.get("alpha", 0.05)),
-            beta=float(self.cost_reward_config.get("beta", 0.0001)),
             gamma=curriculum_gamma(
                 float(self.cost_reward_config.get("gamma", 0.01)),
                 force_active,
@@ -126,11 +125,6 @@ class RewardManager:
         """Return True iff the gold-grounding reward term is on."""
         grounding = (self.cost_reward_config or {}).get("grounding")
         return bool(grounding is not None and grounding.get("enabled", False))
-
-    def _cost_in_advantage(self) -> float:
-        """Return the group-normalized cost coeff (option a), else 0."""
-        cfg = self.cost_reward_config or {}
-        return float(cfg.get("cost_in_advantage", 0.0))
 
     def _retrieved_text(
         self, data_item, prompt_length, valid_response_ids,
@@ -260,22 +254,11 @@ class RewardManager:
                     grounding_reward = float(
                         self.cost_reward_config["grounding"].get("lam", 0.0)
                     ) * gold_recall
-                if self._cost_in_advantage() > 0:
-                    # cost moves to the advantage, alpha/beta zeroed
-                    cost_cfg = replace(
-                        self._budget_reward_config(force_active),
-                        alpha=0.0,
-                        beta=0.0,
-                    )
-                else:
-                    cost_cfg = self._budget_reward_config(force_active)
                 score, _ = compute_budget_reward(
                     answer_score=answer_reward,
                     valid_search_calls=valid_search_calls,
-                    generated_tokens=generated_tokens,
-                    retrieved_tokens=retrieved_tokens,
                     declared_budget=effective_budget,
-                    config=cost_cfg,
+                    config=self._budget_reward_config(force_active),
                     gold_budget=gold_budget,
                     grounding_reward=grounding_reward,
                 )

@@ -16,6 +16,7 @@ from search_r1.budgeting import (
     select_answer_reward,
     should_force_search,
     title_recall,
+    validate_cost_reward_config,
 )
 
 
@@ -35,29 +36,23 @@ class BudgetingTest(unittest.TestCase):
         score, parts = compute_budget_reward(
             answer_score=1.0,
             valid_search_calls=2,
-            generated_tokens=400,
-            retrieved_tokens=700,
             declared_budget=3,
-            config=BudgetRewardConfig(alpha=0.05, beta=0.0001, gamma=0.01),
+            config=BudgetRewardConfig(gamma=0.01),
         )
 
-        self.assertTrue(math.isclose(score, 0.78))
+        self.assertTrue(math.isclose(score, 0.99))
         self.assertEqual(parts["answer"], 1.0)
-        self.assertEqual(parts["retrieval_penalty"], 0.10)
-        self.assertEqual(parts["token_penalty"], 0.11)
         self.assertEqual(parts["unused_budget_penalty"], 0.01)
 
     def test_compute_budget_reward_ignores_under_declaration(self):
         score, parts = compute_budget_reward(
             answer_score=0.0,
             valid_search_calls=3,
-            generated_tokens=100,
-            retrieved_tokens=200,
             declared_budget=1,
-            config=BudgetRewardConfig(alpha=0.05, beta=0.0001, gamma=0.01),
+            config=BudgetRewardConfig(gamma=0.01),
         )
 
-        self.assertTrue(math.isclose(score, -0.18))
+        self.assertTrue(math.isclose(score, 0.0))
         self.assertEqual(parts["unused_budget_penalty"], 0.0)
 
 
@@ -116,16 +111,12 @@ class DeclarationFloorTest(unittest.TestCase):
         score, parts = compute_budget_reward(
             answer_score=1.0,
             valid_search_calls=1,
-            generated_tokens=100,
-            retrieved_tokens=200,
             declared_budget=1,
-            config=BudgetRewardConfig(
-                alpha=0.05, beta=0.0001, gamma=0.01, delta=0.02
-            ),
+            config=BudgetRewardConfig(gamma=0.01, delta=0.02),
             gold_budget=4,
         )
 
-        self.assertTrue(math.isclose(score, 0.86))
+        self.assertTrue(math.isclose(score, 0.94))
         self.assertTrue(
             math.isclose(parts["under_declaration_penalty"], 0.06)
         )
@@ -134,8 +125,6 @@ class DeclarationFloorTest(unittest.TestCase):
         _, parts = compute_budget_reward(
             answer_score=1.0,
             valid_search_calls=1,
-            generated_tokens=100,
-            retrieved_tokens=200,
             declared_budget=1,
             config=BudgetRewardConfig(),
             gold_budget=4,
@@ -147,8 +136,6 @@ class DeclarationFloorTest(unittest.TestCase):
         _, parts_none = compute_budget_reward(
             answer_score=0.0,
             valid_search_calls=1,
-            generated_tokens=0,
-            retrieved_tokens=0,
             declared_budget=1,
             config=BudgetRewardConfig(delta=0.1),
             gold_budget=None,
@@ -156,8 +143,6 @@ class DeclarationFloorTest(unittest.TestCase):
         _, parts_met = compute_budget_reward(
             answer_score=0.0,
             valid_search_calls=4,
-            generated_tokens=0,
-            retrieved_tokens=0,
             declared_budget=5,
             config=BudgetRewardConfig(delta=0.1),
             gold_budget=4,
@@ -261,20 +246,16 @@ class GroundingRewardTest(unittest.TestCase):
         )
 
     def test_compute_budget_reward_adds_grounding_term(self):
-        cfg = BudgetRewardConfig(alpha=0.05, beta=0.0001, gamma=0.01)
+        cfg = BudgetRewardConfig(gamma=0.01)
         base, _ = compute_budget_reward(
             answer_score=0.0,
             valid_search_calls=2,
-            generated_tokens=100,
-            retrieved_tokens=200,
             declared_budget=2,
             config=cfg,
         )
         withg, parts = compute_budget_reward(
             answer_score=0.0,
             valid_search_calls=2,
-            generated_tokens=100,
-            retrieved_tokens=200,
             declared_budget=2,
             config=cfg,
             grounding_reward=0.3,
@@ -283,12 +264,10 @@ class GroundingRewardTest(unittest.TestCase):
         self.assertEqual(parts["grounding_reward"], 0.3)
 
     def test_correct_beats_incorrect_when_lambda_bounded(self):
-        cfg = BudgetRewardConfig(alpha=0.05, beta=0.0001, gamma=0.01)
+        cfg = BudgetRewardConfig(gamma=0.01)
         worst_correct, _ = compute_budget_reward(
             answer_score=1.0,
             valid_search_calls=5,
-            generated_tokens=256,
-            retrieved_tokens=2000,
             declared_budget=5,
             config=cfg,
             grounding_reward=0.0,
@@ -296,8 +275,6 @@ class GroundingRewardTest(unittest.TestCase):
         best_incorrect, _ = compute_budget_reward(
             answer_score=0.0,
             valid_search_calls=0,
-            generated_tokens=0,
-            retrieved_tokens=0,
             declared_budget=0,
             config=cfg,
             grounding_reward=0.3,
@@ -331,43 +308,62 @@ class FindBudgetDigitPositionTest(unittest.TestCase):
         )
 
 
-class CostInAdvantageRewardTest(unittest.TestCase):
-    """v5 reward path: alpha/beta zeroed, gamma/delta couplings kept.
+class ValidateCostRewardConfigTest(unittest.TestCase):
+    def test_accepts_disabled_config_whatever_the_coeff(self):
+        validate_cost_reward_config(None)
+        validate_cost_reward_config({"enabled": False})
+        validate_cost_reward_config(
+            {"enabled": False, "cost_in_advantage": 0.0}
+        )
 
-    When cost lives in the advantage the reward must charge no
-    absolute retrieval/token cost but keep the planning couplings:
-    gamma (unused budget) and delta (declaration floor toward gold).
+    def test_accepts_enabled_with_positive_coeff(self):
+        validate_cost_reward_config(
+            {"enabled": True, "cost_in_advantage": 0.5}
+        )
+
+    def test_rejects_enabled_without_a_cost_signal(self):
+        for cfg in ({"enabled": True}, {"enabled": True,
+                                        "cost_in_advantage": 0.0}):
+            with self.assertRaises(ValueError):
+                validate_cost_reward_config(cfg)
+
+
+class CostInAdvantageRewardTest(unittest.TestCase):
+    """The scalar reward carries the couplings, never the call cost.
+
+    Absolute retrieval and token cost belong to the advantage, so the
+    reward must vary only with the planning couplings: gamma (unused
+    budget) and delta (declaration floor toward gold).
     """
 
-    def test_zeroed_alpha_beta_keeps_gamma_delta_couplings(self):
-        cfg = BudgetRewardConfig(
-            alpha=0.0, beta=0.0, gamma=0.01, delta=0.02
+    def test_reward_is_flat_in_calls_at_a_fixed_declaration(self):
+        cfg = BudgetRewardConfig(gamma=0.0, delta=0.0)
+        common = dict(
+            answer_score=1.0, declared_budget=0, config=cfg
         )
-        score, parts = compute_budget_reward(
+        cheap, _ = compute_budget_reward(valid_search_calls=0, **common)
+        pricey, _ = compute_budget_reward(valid_search_calls=5, **common)
+        self.assertEqual(cheap, pricey)
+
+    def test_couplings_still_apply(self):
+        cfg = BudgetRewardConfig(gamma=0.01, delta=0.02)
+        score, _ = compute_budget_reward(
             answer_score=1.0,
             valid_search_calls=1,
-            generated_tokens=300,
-            retrieved_tokens=900,
             declared_budget=4,
             config=cfg,
             gold_budget=2,
             grounding_reward=0.25,
         )
-        self.assertEqual(parts["retrieval_penalty"], 0.0)
-        self.assertEqual(parts["token_penalty"], 0.0)
         # gamma*max(0, 4-1) = .03, delta idle since declared > gold
         self.assertTrue(math.isclose(score, 1.0 + 0.25 - 0.03))
 
     def test_declare_down_escape_costs_more_than_gamma_saves(self):
         # delta > gamma, so under-declaring saves gamma but pays delta
-        cfg = BudgetRewardConfig(
-            alpha=0.0, beta=0.0, gamma=0.01, delta=0.02
-        )
+        cfg = BudgetRewardConfig(gamma=0.01, delta=0.02)
         common = dict(
             answer_score=0.0,
             valid_search_calls=1,
-            generated_tokens=100,
-            retrieved_tokens=100,
             config=cfg,
             gold_budget=3,
             grounding_reward=0.0,
