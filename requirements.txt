@@ -1,4 +1,5 @@
 accelerate
+bitsandbytes>=0.43.2
 codetiming
 datasets
 dill
@@ -6,9 +7,10 @@ flash-attn
 hydra-core
 numpy
 pandas
+peft>=0.19.1
 pybind11
 ray
-tensordict<0.6
+tensordict
 transformers<4.48
 vllm<=0.6.3
 wandb

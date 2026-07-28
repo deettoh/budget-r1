@@ -33,11 +33,14 @@ authors = [
 # Dependencies corresponding to install_requires in setup.py
 dependencies = [
     "accelerate",
+    "bitsandbytes>=0.43.2",
     "codetiming",
     "datasets",
     "dill",
     "hydra-core",
     "numpy",
+    "pandas",
+    "peft>=0.19.1",
     "pybind11",
     "ray",
     "tensordict",
