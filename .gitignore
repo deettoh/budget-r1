@@ -120,12 +120,20 @@ tests/e2e/toy_examples/deepspeed/synchronous/output.txt
 log/
 
 **logs
-# FYP slurm scratch (smoke/calib/diagnostic/non-final) - keep on disk, untracked
-run_qlora_smoke.sh
-run_qlora_calib.sh
-run_control_lora_calib.sh
-run_control_v2_emflip.sh
-run_treatment_lora_v2.sh
-run_treatment_lora_v3.sh
-test_wandb.sh
+
+# experiment scripts
+# scripts to reproduce runs are train_*.sh, eval_greedy.sh, prepare_data.sh
+/run.sh
+/run_*.sh
+/test_wandb.sh
+/download_qwen_it.py
 *.sh.new
+
+# cluster-specific
+scripts/disk_report.py
+scripts/tmp_report.py
+scripts/hpc_sitecustomize.py
+scripts/calibrate_nprobe.py
+scripts/analyze_budget_diag.py
+scripts/analyze_emflip.py
+scripts/wandb_setup_and_test.py
