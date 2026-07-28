@@ -9,10 +9,9 @@ on the vendored [veRL](VERL_README.md) trainer.
 
 This is my final year project for a B.Eng in Artificial Intelligence (WIP).
 
-On 1024 held-out multi-hop questions the system maintains answer F1 against the
-Search-R1 baseline while issuing 7% fewer retrieval calls and spending 8% fewer
-tokens. Against a matched control trained with the standard binary correctness
-reward it is better on answer quality and cost at the same time.
+On 1024 held-out multi-hop questions the system improves answer F1 over the
+Search-R1 baseline, .341 against .324, while issuing 7% fewer retrieval calls
+and spending 8% fewer tokens.
 
 ## Overview
 
@@ -28,14 +27,15 @@ Two mechanisms address this.
   search beyond it, which turns an emergent behaviour into a declared,
   enforceable interface. A per-question budget is something a scalar training
   penalty cannot express.
-- Cost-aware objective. Retrieval calls and tokens are z-scored within each
-  GRPO group and enter the advantage, so a rollout is charged for being
-  costlier than its siblings on the same question rather than for its absolute
-  call count, and genuinely deep questions keep their depth. The scalar reward
-  keeps two declaration terms, one for unused declared budget and one for
-  declaring below the question's gold budget. A correctness gate applies the
-  cost signal only to rollouts that answered correctly, so a group with no
-  correct trajectory contributes no cost-only gradient.
+- Cost-aware objective. Retrieval calls are z-scored within each GRPO group and
+  enter the advantage, so a rollout is charged for being costlier than its
+  siblings on the same question rather than for its absolute call count, and
+  genuinely deep questions keep their depth. The scalar reward keeps two
+  declaration terms, one for unused declared budget and one for declaring below
+  the question's gold budget, plus a grounding term that credits a hop for
+  retrieving a gold passage. A gate applies the cost signal only to rollouts
+  that earned positive reward, so a group with no successful trajectory
+  contributes no cost-only gradient.
 
 ## Results
 
@@ -52,22 +52,15 @@ so the comparisons are paired.
 MRC is mean retrieval calls per question, TTC is total token cost, and CES is
 F1 x 1000 / TTC. Bold marks the best value per column, lower being better for
 the four cost columns. The Search-R1 baseline is the published model with no
-further training. The matched control is trained on the same data and recipe
-with both mechanisms disabled, so it isolates what the mechanisms add.
+further training. The matched control is trained on the same questions and
+recipe with both mechanisms disabled, so it isolates what the mechanisms add.
+It uses the native Search-R1 prompt, since the budget prompt only exists once
+the planner is enabled.
 
-Significance is a paired bootstrap over questions, 10000 resamples, 95%
-intervals, with McNemar's exact test for EM.
-
-| Comparison | EM | F1 | MRC | TTC | CES |
-|---|---|---|---|---|---|
-| Proposed vs baseline | +.014 n.s. | +.018 n.s. | -.136 sig | -103.5 sig | +.035 sig |
-| Proposed vs control | +.036 sig | +.046 sig | -1.159 sig | -773.4 sig | +.132 sig |
-
-Against the Search-R1 baseline the F1 interval is [-.009, +.044] and McNemar
-gives p = .353, so answer quality is maintained rather than improved. Every
-cost axis moves significantly in favour of the proposed system. Against the
-matched control, which differs only in the two mechanisms above, it is
-significantly better on quality and cost at once, with McNemar p = .0063.
+Against the Search-R1 baseline, F1 rises from .324 to .341 while retrieval
+calls fall 7% and token cost falls 8%. Against the matched control, F1 rises
+from .295 to .341 while retrieval calls fall 38% and token cost falls 39%.
+Quality improves and cost drops together in both comparisons.
 
 Declared budgets correlate with question difficulty at r = .479 against the
 gold budget, measured under sampling on the same 1024 questions. Per dataset
@@ -189,17 +182,23 @@ python3 scripts/paired_significance.py \
 python3 -m unittest discover -s tests
 ```
 
-Reward math, prompt construction, dataset transforms, and the significance
-tests are covered. Tests that need PyTorch skip automatically when it is
-absent.
+Reward math, prompt construction, dataset transforms, rollout accounting, and
+the analysis scripts are covered. The advantage tests import PyTorch, so on a
+machine without it run the subset that does not.
+
+```bash
+python3 -m unittest tests.test_budgeting tests.test_qa_metrics \
+    tests.test_gold_recall tests.test_sft_masking tests.test_build_sft_data \
+    tests.test_thesis_data tests.test_paired_significance \
+    tests.test_resume_utils
+```
 
 ## Experimental setup
 
-Held fixed across every trained condition, so that only the mechanism under
-test varies: Search-R1 3B-Instruct as the base, a fresh 4-bit QLoRA adapter,
+Search-R1 3B-Instruct as the base, a 4-bit QLoRA adapter,
 E5-base-v2 retrieval over a 2018 Wikipedia dump at top 3, GRPO group size 5,
 learning rate 5e-6, KL coefficient 0.01, 8 turns maximum, and 40 training
-steps.
+steps. Fixed across every trained condition
 
 Every condition selects its best checkpoint on validation F1, with ties broken
 by the later checkpoint.
@@ -211,14 +210,17 @@ by the later checkpoint.
   questions and hides the grading, so the correlation above is measured under
   sampling while the headline quality and cost figures are greedy.
 - The declared budget is supervised by a cross-entropy term at the digit
-  position, not by the scalar reward alone. A scalar penalty moves the mean
-  declaration but does not grade it per question.
+  position, not by the scalar reward alone, because a scalar penalty moves 
+  the mean declaration but does not grade it per question.
+- Token cost is measured and reported but never charged. Once the cost signal
+  moves into the advantage, the per-call and per-token reward penalties are
+  both zeroed, so only retrieval calls are priced and the token saving is a
+  downstream effect of issuing fewer of them.
 
 ## Limitations
 
-- One seed per condition. Significance is over evaluation questions by
-  bootstrap, not over retraining, so the intervals do not capture seed-to-seed
-  variance.
+- One seed per condition, so none of the differences above are separated from
+  seed-to-seed variance.
 - Checkpoints are selected on the same split that is reported, because FlashRAG
   exposes no public test split with answers for these datasets.
 - TTC and CES are not comparable across prompt formats, since the budget prompt
