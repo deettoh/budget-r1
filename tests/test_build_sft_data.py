@@ -1,4 +1,13 @@
-"""Unit tests for the SFT data builder pure functions."""
+"""Unit tests for the SFT data builder pure functions.
+
+Covers trace splitting and question extraction, both budget-splice
+templates, the used and gold budget labels, EM filtering, the
+per-group cap and upsampler, and the shared train/val partition.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_build_sft_data
+"""
 
 import importlib.util
 import os

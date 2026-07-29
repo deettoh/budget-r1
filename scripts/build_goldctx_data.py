@@ -4,6 +4,11 @@ Injects each question's gold passages into the naive-RAG prompt for a
 max_turns=0 read. A high score means the reader converts handed
 evidence (query-limited collapse), a low score generation-limited.
 Gold comes from the dataset, no GPU or retriever.
+
+Typical usage example:
+
+  python3 scripts/build_goldctx_data.py --num 200 \
+    --out data/goldctx/test.parquet
 """
 
 import argparse
@@ -33,8 +38,16 @@ def make_goldctx_record(
 ) -> dict | None:
     """Return one gold-context eval record, or None if no gold passages.
 
-    Uses the same prompt wording as the naive-RAG baseline so the only
-    difference is gold-vs-retrieved passages.
+    Args:
+        example: Source dataset row.
+        idx: Row index, stored in extra_info for pairing.
+        data_source: Dataset name driving gold-passage extraction.
+        split: Split name recorded on the record.
+
+    Returns:
+        A record using the same prompt wording as the naive-RAG
+        baseline, so the only difference is gold-vs-retrieved
+        passages. None when the row exposes no gold passages.
     """
     pairs = thesis_qa.extract_gold_passages(example, data_source)
     if not pairs:

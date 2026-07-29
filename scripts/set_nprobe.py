@@ -4,6 +4,11 @@ Calibration picked nprobe=512 (recall@3 0.995 of the exhaustive-IVF
 ceiling). Persisting it on the shared index freezes the operating
 point across every condition without touching the divergent HPC
 retrieval code.
+
+Typical usage example:
+
+  python3 scripts/set_nprobe.py --nprobe 512 \
+    --index retrieval_data/e5_IVF.index
 """
 
 import argparse

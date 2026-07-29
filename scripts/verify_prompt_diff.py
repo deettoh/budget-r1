@@ -3,6 +3,14 @@
 Guards the budget-first CE ablation, which trains the v7 recipe on the
 v6 parquet. Rows compare position-aligned, valid because both were
 built with the same sources, cap and seed.
+
+Attributes:
+    V6: Path to the v6 budget train parquet.
+    V7: Path to the v7 budget train parquet.
+
+Typical usage example:
+
+  python3 scripts/verify_prompt_diff.py
 """
 
 import sys
@@ -21,10 +29,12 @@ if len(a) != len(b):
 
 
 def question_of(row):
+    """Return the question text carried by a prompt row."""
     return row["prompt"][0]["content"].split("Question:")[-1].strip()
 
 
 def gold_of(row):
+    """Return the gold budget stored in a row's extra_info."""
     return int(row["extra_info"]["gold_budget"])
 
 

@@ -1,7 +1,12 @@
 """Unit tests for verl.utils.reward_score.qa_metrics.
 
-Covers EM, token-level F1, and CES. MRC and TTC are plain aggregates
-with no logic to unit-test here.
+Covers answer normalization, answer-span extraction, EM, token-level
+F1 and CES. MRC and TTC are plain aggregates with no logic to
+unit-test here.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_qa_metrics
 """
 
 from __future__ import annotations
@@ -25,8 +30,7 @@ _PROMPT_EXAMPLE = "<answer> Beijing </answer>"
 
 
 def _wrap(answer: str) -> str:
-    """Build a fake decoded solution string with the prompt's example
-    plus the model's true answer span."""
+    """Return a decoded solution holding the example, then answer."""
     return f"... {_PROMPT_EXAMPLE} ... <answer>{answer}</answer>"
 
 

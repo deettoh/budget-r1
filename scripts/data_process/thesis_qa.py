@@ -2,6 +2,18 @@
 
 --require_budget switches to the budget prompt. extra_info always
 carries gold_budget and gold_titles regardless.
+
+Attributes:
+    SUPPORTED_DATASETS: Dataset names accepted by --data_sources.
+    SUPPORTED_MODES: Accepted --mode values.
+    BUDGET_TEMPLATES: Accepted --budget_template values.
+    MAX_GOLD_BUDGET: Upper clamp on the derived gold budget.
+
+Typical usage example:
+
+  python3 scripts/data_process/thesis_qa.py --mode rl \
+    --local_dir data/thesis_rl \
+    --data_sources hotpotqa,2wikimultihopqa
 """
 
 import argparse
@@ -34,8 +46,15 @@ def make_search_prefix(
 ) -> str:
     """Return the rollout user-prompt prefix.
 
-    With require_budget the model declares <budget>k</budget> before
-    its first search. budget_template picks the wording.
+    Args:
+        question: Question text appended to the instructions.
+        require_budget: When set, the model declares
+            <budget>k</budget> before its first search.
+        max_budget: Upper bound quoted in the budget instructions.
+        budget_template: Picks the budget wording.
+
+    Returns:
+        The user-prompt prefix for one rollout.
 
     Raises:
         ValueError: If ``budget_template`` is unknown.
@@ -130,7 +149,12 @@ def _as_list(value: Any) -> list[Any]:
 def extract_answer(example: dict[str, Any]) -> Any:
     """Return the first non-empty answer field.
 
-    Tries ``golden_answers``, ``answers``, ``answer`` in order.
+    Args:
+        example: Source dataset row.
+
+    Returns:
+        The value of ``golden_answers``, ``answers`` or ``answer``,
+        whichever is present and non-empty first.
 
     Raises:
         KeyError: If none are present or non-empty.
@@ -147,7 +171,12 @@ MAX_GOLD_BUDGET = 5
 def _titles_from_supporting_facts(supporting_facts: Any) -> set[str]:
     """Return distinct titles from any supporting-facts shape.
 
-    Handles the columnar-dict, [title, sent_idx] pairs, and dict forms.
+    Args:
+        supporting_facts: Raw field in the columnar-dict,
+            [title, sent_idx] pair, or dict form.
+
+    Returns:
+        The distinct titles, empty when the shape carries none.
     """
     titles: set[str] = set()
     if isinstance(supporting_facts, dict):
@@ -171,8 +200,14 @@ def _titles_from_supporting_facts(supporting_facts: Any) -> set[str]:
 def derive_gold_budget(example: dict[str, Any], data_source: str) -> int:
     """Return gold budget clamped to ``[1, MAX_GOLD_BUDGET]``.
 
-    Tries supporting-fact titles, supporting-paragraph ids, then the
-    MuSiQue question-decomposition fallback.
+    Args:
+        example: Source dataset row.
+        data_source: Dataset name selecting the hop-count signal.
+
+    Returns:
+        The hop count from supporting-fact titles, supporting-paragraph
+        ids, or the MuSiQue question-decomposition fallback, in that
+        order of preference.
 
     Raises:
         ValueError: If no usable signal is present.
@@ -227,10 +262,7 @@ def derive_gold_budget(example: dict[str, Any], data_source: str) -> int:
 def extract_gold_titles(
     example: dict[str, Any], data_source: str
 ) -> list[str]:
-    """Return distinct gold supporting-passage titles, sorted.
-
-    Reuses the title parser plus MuSiQue paragraphs, empty when none.
-    """
+    """Return distinct gold supporting-passage titles, sorted."""
     metadata = example.get("metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
 
@@ -277,7 +309,11 @@ def _join_sentences(value: Any) -> str:
 def _context_title_to_body(context: Any) -> dict[str, str]:
     """Map passage title -> joined body text from a context field.
 
-    Handles the columnar-dict and list-of-pairs/dict forms.
+    Args:
+        context: Raw field in the columnar-dict or list-of-pairs form.
+
+    Returns:
+        Title to joined body text, empty when the shape carries none.
     """
     bodies: dict[str, str] = {}
     if isinstance(context, dict):
@@ -310,8 +346,14 @@ def extract_gold_passages(
 ) -> list[tuple[str, str]]:
     """Return ``(title, body)`` for each gold supporting passage.
 
-    Body is the passage text for the recall-probe oracle query.
-    Passages whose body cannot be recovered are skipped.
+    Args:
+        example: Source dataset row.
+        data_source: Dataset name selecting the passage layout.
+
+    Returns:
+        Title and body per gold passage, where body is the text used
+        as the recall-probe oracle query. Passages whose body cannot
+        be recovered are skipped.
     """
     gold_titles = set(extract_gold_titles(example, data_source))
     if not gold_titles:
@@ -359,8 +401,19 @@ def make_rl_record(
 ) -> dict[str, Any]:
     """Return one RL parquet record.
 
-    require_budget controls only the prompt wording, extra_info always
-    carries gold_budget and gold_titles for the cap and grounding.
+    Args:
+        example: Source dataset row.
+        idx: Row index, stored in extra_info for pairing.
+        data_source: Dataset name recorded on the record.
+        split: Split name recorded on the record.
+        require_budget: Controls only the prompt wording. The
+            gold_budget and gold_titles in extra_info are written
+            either way, for the cap and the grounding reward.
+        max_budget: Upper bound quoted in the budget instructions.
+        budget_template: Picks the budget wording.
+
+    Returns:
+        One record in the Search-R1 RL parquet format.
     """
     question = make_search_prefix(
         example["question"],
@@ -393,8 +446,14 @@ def cap_records_per_budget(
 ) -> list[dict[str, Any]]:
     """Return records with at most ``cap`` rows per gold_budget value.
 
-    Rebalances hop variance via a seeded per-group shuffle, kept in
-    original order. A non-positive cap returns the input unchanged.
+    Args:
+        records: Records to cap, read but not mutated.
+        cap: Maximum rows per gold_budget value. Non-positive returns
+            the input unchanged.
+        seed: Seed for the per-group shuffle that picks survivors.
+
+    Returns:
+        A new list in the original order, rebalancing hop variance.
 
     Raises:
         ValueError: If any record lacks ``extra_info.gold_budget``.
@@ -441,6 +500,17 @@ def build_records(
     budget_template: str = "think_first",
 ) -> list[dict[str, Any]]:
     """Return RL records for every example in ``split``.
+
+    Args:
+        data_sources: Dataset names to pull and concatenate.
+        mode: Build mode, must be in ``SUPPORTED_MODES``.
+        split: Split name to read from each dataset.
+        require_budget: Controls only the prompt wording.
+        max_budget: Upper bound quoted in the budget instructions.
+        budget_template: Picks the budget wording.
+
+    Returns:
+        One record per example, across every data source.
 
     Raises:
         ValueError: If ``split`` is missing for some dataset or

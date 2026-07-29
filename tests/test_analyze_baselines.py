@@ -1,4 +1,12 @@
-"""Unit tests for the baseline metric aggregation."""
+"""Unit tests for the baseline metric aggregation.
+
+Covers the EM, F1, MRC, TTC and CES aggregates, the retrieval-call
+distribution, and the fail-fast on an empty record list.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_analyze_baselines
+"""
 
 import importlib.util
 import os

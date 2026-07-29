@@ -1,4 +1,13 @@
-"""Unit tests for prompt-prefix shape and ``derive_gold_budget``."""
+"""Unit tests for prompt-prefix shape and ``derive_gold_budget``.
+
+Covers the budget and non-budget prompt templates, hop-count
+derivation across the HotpotQA, 2WikiMultiHopQA and MuSiQue field
+layouts, the per-budget record cap, and RL record assembly.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_thesis_data
+"""
 
 import unittest
 
@@ -82,14 +91,10 @@ class ThesisDataTest(unittest.TestCase):
             derive_gold_budget(example, "hotpotqa")
 
 
+# musique rows lack supporting_facts and paragraphs so titles come
+# from metadata.question_decomposition[*].support_paragraph.title
 class ExtractGoldTitlesMusiqueTest(unittest.TestCase):
-    """FlashRAG musique carries titles only inside the decomposition.
-
-    Every musique row lacks supporting_facts / paragraphs, so the
-    extractor must read metadata.question_decomposition[*]
-    .support_paragraph.title (the hole that zeroed grounding on
-    musique in jobs 6695-6722).
-    """
+    """FlashRAG musique carries titles only inside the decomposition."""
 
     def _flashrag_musique_example(self):
         return {

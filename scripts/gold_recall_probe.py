@@ -4,6 +4,11 @@ Measures gold recall@k under an oracle query (tier A, is the passage
 reachable) and the question (tier B), swept over --topks. Low A means
 corpus-limited, high A with low B query-limited, both high means
 generation-limited. Retriever and index pass only, no training.
+
+Typical usage example:
+
+  python3 scripts/gold_recall_probe.py --topks 3,5,10 --num 200 \
+    --out outputs/gold_recall_probe.json
 """
 
 import argparse
@@ -63,8 +68,15 @@ def _oracle_recall_at_k(
 ) -> float:
     """Return mean per-example oracle recall@k.
 
-    Each oracle query targets one gold title; per example = fraction of
-    its gold passages whose title is in that query's top-k retrieved.
+    Args:
+        owner: (example index, gold title) per oracle query.
+        oracle_titles: Retrieved titles for each oracle query.
+        num_examples: Example count the mean is taken over.
+        k: Cutoff applied to each retrieved list.
+
+    Returns:
+        Mean over examples of the fraction of gold passages whose
+        title appears in the top-k of the query that targets it.
     """
     hits = [0] * num_examples
     total = [0] * num_examples
@@ -140,8 +152,14 @@ def _retrieve_titles(retriever, queries, topk) -> list[list[str]]:
 def _oracle_queries(examples, oracle_query):
     """Return (query_text, owner) pairs for the Tier-A oracle probe.
 
-    ``passage`` queries with the gold passage body, ``title`` with the
-    gold title; both check whether the gold title is retrieved.
+    Args:
+        examples: Rows carrying gold_passages and gold_titles.
+        oracle_query: ``passage`` queries with the gold passage body,
+            ``title`` with the gold title.
+
+    Returns:
+        The query texts and the (example index, gold title) each one
+        targets. Both modes check whether the gold title is retrieved.
     """
     queries, owner = [], []
     for i, ex in enumerate(examples):
@@ -184,6 +202,7 @@ def _probe_dataset(retriever, examples, topks, oracle_query) -> dict:
 
 
 def main() -> None:
+    """Sweep tier-A and tier-B recall over --topks, per data source."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--data_sources", default="hotpotqa,2wikimultihopqa,musique"

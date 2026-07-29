@@ -1,4 +1,12 @@
-"""Unit tests for the gold-context (oracle-RAG) eval parquet builder."""
+"""Unit tests for the gold-context (oracle-RAG) eval parquet builder.
+
+Covers gold-passage formatting and record assembly, including the
+None return when a row exposes no gold passages.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_goldctx
+"""
 
 import unittest
 

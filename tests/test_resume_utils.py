@@ -1,4 +1,13 @@
-"""Unit tests for the resume checkpoint finder."""
+"""Unit tests for the resume checkpoint finder.
+
+Covers step-number parsing, the absent-directory and no-checkpoint
+cases, and the optimizer state round-trip including a checkpoint
+written without an optimizer file.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_resume_utils
+"""
 
 import os
 import tempfile

@@ -2,8 +2,12 @@
 
 Asserts logprobs_and_entropy_from_logits_chunked matches the stock
 log_softmax/entropy_from_logits path in both forward values and
-gradients. Requires torch; skipped automatically where unavailable
-(e.g. the CPU-only dev box), and exercised on the HPC env.
+gradients. Requires torch, skipping automatically where it is
+unavailable such as the CPU-only dev box.
+
+Typical usage example:
+
+  srun python -m unittest tests.test_chunked_logprob
 """
 
 import unittest

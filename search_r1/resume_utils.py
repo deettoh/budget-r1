@@ -1,4 +1,18 @@
-"""Locate and restore training state for warm-restart resume."""
+"""Locate and restore training state for warm-restart resume.
+
+Finds the highest global_step_N under an actor directory and moves
+optimizer and scheduler state in and out of it. A checkpoint written
+before this feature existed has no optimizer file, so the loader
+reports that rather than failing and the run resumes fresh.
+
+Typical usage example:
+
+  from search_r1.resume_utils import find_latest_checkpoint
+
+  found = find_latest_checkpoint("verl_checkpoints/run/actor")
+  if found is not None:
+      path, step = found
+"""
 
 import os
 import re
@@ -8,10 +22,7 @@ _OPTIM_FILE = "optim_state.pt"
 
 
 def find_latest_checkpoint(actor_dir: str):
-    """Return (path, step) of the highest global_step_N, else None.
-
-    None when actor_dir is absent or holds no step checkpoints.
-    """
+    """Return (path, step) of the highest global_step_N, else None."""
     if not os.path.isdir(actor_dir):
         return None
     best_step = -1
@@ -31,7 +42,14 @@ def find_latest_checkpoint(actor_dir: str):
 
 
 def save_optimizer_state(optimizer, lr_scheduler, directory: str) -> None:
-    """Save optimizer and scheduler state into directory."""
+    """Save optimizer and scheduler state into directory.
+
+    Args:
+        optimizer: Optimizer whose state_dict is written.
+        lr_scheduler: Scheduler to save; None is stored as None so a
+            run without one still round-trips through the loader.
+        directory: Checkpoint directory receiving the state file.
+    """
     import torch
 
     state = {
@@ -46,9 +64,14 @@ def save_optimizer_state(optimizer, lr_scheduler, directory: str) -> None:
 def load_optimizer_state(optimizer, lr_scheduler, directory: str) -> bool:
     """Restore optimizer and scheduler state, return True if loaded.
 
-    Returns False when the directory has no optim file so a
-    pre-feature checkpoint resumes with a fresh optimizer instead of
-    failing.
+    Args:
+        optimizer: Optimizer to load state into.
+        lr_scheduler: Scheduler to load state into, may be None.
+        directory: Checkpoint directory holding the state file.
+
+    Returns:
+        False when the directory has no optim file, so a pre-feature
+        checkpoint resumes with a fresh optimizer instead of failing.
     """
     import torch
 

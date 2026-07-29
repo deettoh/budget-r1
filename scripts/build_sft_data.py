@@ -4,6 +4,17 @@ Keeps EM-correct rollouts and emits two symmetric arms. Treatment
 splices a declared <budget>k</budget> into the trace, control keeps the
 native response verbatim. Both arms share one train/val partition so a
 question lands in the same split on each side.
+
+Attributes:
+    MAX_BUDGET: Upper clamp on a spliced declaration.
+    VAL_FRACTION: Share of questions held out for validation.
+    SFT_BUDGET_TEMPLATES: Accepted --budget_template values.
+    ASSISTANT_MARKER: Token marking where a trace response begins.
+
+Typical usage example:
+
+  python3 scripts/build_sft_data.py \
+    --trace_dump outputs/frozen_native_dump.json
 """
 
 import argparse
@@ -34,6 +45,12 @@ _TRAILING_SPECIAL = ("<|im_end|>", "<|endoftext|>")
 def split_prompt_response(text: str) -> tuple[str, str]:
     """Split a decoded trace at the assistant marker.
 
+    Args:
+        text: One decoded rollout trace.
+
+    Returns:
+        The prompt and response halves.
+
     Raises:
         ValueError: If the assistant marker is absent.
     """
@@ -45,6 +62,12 @@ def split_prompt_response(text: str) -> tuple[str, str]:
 
 def extract_question(prompt_part: str) -> str:
     """Return the question from a native prompt segment.
+
+    Args:
+        prompt_part: Prompt half of a split trace.
+
+    Returns:
+        The question text, stripped.
 
     Raises:
         ValueError: If no non-empty question follows ``Question:``.
@@ -79,8 +102,15 @@ def treatment_response(
 ) -> str:
     """Return the trace response with <budget>k</budget> spliced in.
 
-    budget_first prepends the tag. think_first inserts it after the
-    pre-search reasoning, before the first action tag.
+    Args:
+        k: Budget to declare.
+        response: Native trace response to splice into.
+        budget_template: budget_first prepends the tag, think_first
+            inserts it after the pre-search reasoning, before the
+            first action tag.
+
+    Returns:
+        The response carrying the declaration.
 
     Raises:
         ValueError: On unknown template, or for think_first when the
@@ -115,9 +145,15 @@ def treatment_response(
 def _resolve_budget(rec: dict, budget_label: str) -> int:
     """Return the k to declare for one record under budget_label.
 
-    used = the trace's own search count, gold = extra-info gold
-    budget. gold fails loud on a missing or negative value so a bad
-    dump cannot silently produce mislabeled data.
+    Args:
+        rec: One trace record from the dump.
+        budget_label: used takes the trace's own search count, gold
+            takes the extra-info gold budget. gold fails loud on a
+            missing or negative value so a bad dump cannot silently
+            produce mislabeled data.
+
+    Returns:
+        The budget to declare, clamped to the valid range.
 
     Raises:
         ValueError: On unknown budget_label or unusable gold_budget.
@@ -147,9 +183,18 @@ def upsample_records(
 ) -> list:
     """Return records with minority (source, k) groups duplicated.
 
-    Smaller budget groups are duplicated toward the source's largest,
-    capped at max_factor times their own size. Train partition only,
-    so duplicates never straddle the val split.
+    Train partition only, so duplicates never straddle the val split.
+
+    Args:
+        records: Records to upsample, read but not mutated.
+        budget_label: Selector passed to _resolve_budget for grouping.
+        max_factor: Cap on how far a group may grow, as a multiple of
+            its own size. Non-positive returns the input unchanged.
+        seed: Seed for the per-group shuffle.
+
+    Returns:
+        A new list where smaller budget groups are duplicated toward
+        the source's largest.
     """
     if max_factor <= 0:
         return records
@@ -185,9 +230,17 @@ def balance_records(
 ) -> list:
     """Return EM-correct records capped per (source, budget) group.
 
-    Seeded per-group shuffle picks survivors, original order kept.
-    Non-EM-correct records are dropped when the cap is active because
-    their budget label is meaningless.
+    Args:
+        records: Records to cap, read but not mutated.
+        budget_label: Selector passed to _resolve_budget for grouping.
+        cap: Maximum rows per group. Non-positive returns the input
+            unchanged.
+        seed: Seed for the per-group shuffle that picks survivors.
+
+    Returns:
+        A new list in the original order. Non-EM-correct records are
+        dropped when the cap is active, since their budget label is
+        meaningless.
     """
     if cap <= 0:
         return records
@@ -217,6 +270,15 @@ def build_rows(
     budget_template: str = "budget_first",
 ) -> tuple[list, list]:
     """Return (treatment_rows, control_rows) from EM-correct traces.
+
+    Args:
+        records: Trace records to build from.
+        budget_label: Selector passed to _resolve_budget.
+        budget_template: Splice style for the treatment arm.
+
+    Returns:
+        The two arms, where treatment carries a spliced declaration
+        and control keeps the native response verbatim.
 
     Raises:
         ValueError: On unknown budget_template, or if a kept record

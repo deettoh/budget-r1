@@ -4,6 +4,13 @@ naive-RAG injects the top-3 passages at data-prep so the harness logs
 retrieved_tokens=0 and undercounts cost. Counts the injected tokens
 per data_source and reports TTC = generated + injected, comparable to
 the agentic baseline.
+
+Typical usage example:
+
+  python3 scripts/naiverag_cost.py \
+    --parquet data/baseline_naiverag/test.parquet \
+    --eval_json outputs/premise_eval_naiverag.json \
+    --model models/sr1-3b-it
 """
 
 import argparse
@@ -17,10 +24,13 @@ _INFO = re.compile(r"<information>(.*?)</information>", re.DOTALL)
 def last_information_span(content: str) -> str:
     """Return the last <information> block (the injected passages).
 
-    The naive-RAG instruction line literally mentions "<information>"
-    and "</information>", so the first regex match captures that
-    instruction text, not the docs. The injected passages are the
-    last span.
+    Args:
+        content: Full prompt text of one naive-RAG record.
+
+    Returns:
+        The last span, empty when none is present. The instruction
+        line literally mentions "<information>" and "</information>",
+        so the first match captures that text, not the passages.
     """
     spans = _INFO.findall(content)
     return spans[-1] if spans else ""
@@ -31,6 +41,7 @@ def _mean(xs):
 
 
 def main():
+    """Print EM, F1 and injection-corrected TTC/CES per data source."""
     import pandas as pd
     from transformers import AutoTokenizer
 

@@ -1,4 +1,12 @@
-"""Tests for naive-RAG injected-passage extraction."""
+"""Tests for naive-RAG injected-passage extraction.
+
+Covers the last-span rule that skips the instruction line, which
+itself mentions both <information> markers literally.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_naiverag_cost
+"""
 
 import os
 import sys

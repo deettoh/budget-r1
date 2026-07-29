@@ -1,4 +1,13 @@
-"""Unit tests for the item-1 budget-prompt diagnostic aggregation."""
+"""Unit tests for the item-1 budget-prompt diagnostic aggregation.
+
+Covers well-formedness splitting, the declared-k distribution, F1
+broken out by declared k, the derived axes, blocked-field presence,
+and the native F1 baselines overall and per source.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_analyze_budget_diag
+"""
 
 import importlib.util
 import os

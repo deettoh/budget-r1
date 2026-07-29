@@ -1,4 +1,12 @@
-"""Unit tests for the baseline prompt builders."""
+"""Unit tests for the baseline prompt builders.
+
+Covers question extraction from an agentic prompt and the
+closed-book and naive-RAG prompt shapes.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_build_baseline_data
+"""
 
 import importlib.util
 import os

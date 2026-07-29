@@ -4,6 +4,12 @@ Reads premise_eval_*.json (a list with one dict per eval sample) and
 reports EM, F1, has_answer, MRC (+ 0/1/2/3/4+ call distribution), TTC,
 and CES=F1*1000/TTC, overall and per data_source. Validated to
 reproduce the premise-check numbers (MRC 1.99 / CES 0.29).
+
+Typical usage example:
+
+  python3 scripts/analyze_baselines.py --per_source \
+    --runs frozen=outputs/premise_eval_frozen.json \
+    norag=outputs/premise_eval_norag.json
 """
 
 import argparse
@@ -18,7 +24,19 @@ def _mean(values) -> float:
 
 
 def compute_metrics(records: list) -> dict:
-    """Return the aggregate metric dict for one set of samples."""
+    """Return the aggregate metric dict for one set of samples.
+
+    Args:
+        records: Per-sample eval records for one group.
+
+    Returns:
+        Counts, EM, F1, has_answer, MRC with its call distribution,
+        TTC and CES.
+
+    Raises:
+        ValueError: Empty records, which would leave every mean and
+            the CES ratio undefined.
+    """
     if not records:
         raise ValueError("no records to summarize")
     f1 = _mean([r["f1"] for r in records])

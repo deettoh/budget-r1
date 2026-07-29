@@ -1,4 +1,12 @@
-"""Unit tests for the nprobe-calibration recall math."""
+"""Unit tests for the nprobe-calibration recall math.
+
+Covers question extraction, recall@k against the exhaustive-IVF
+ceiling, and the knee selection that picked nprobe=512.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_calibrate_nprobe
+"""
 
 import importlib.util
 import os

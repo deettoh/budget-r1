@@ -3,6 +3,12 @@
 Pairs on (data_source, index), then reports a paired bootstrap CI per
 metric and McNemar's exact test for EM. Both dumps need
 trainer.dump_val_text=true, which is what writes extra_info.index.
+
+Typical usage example:
+
+  python3 scripts/paired_significance.py \
+    --dump_a outputs/eval1k_v7bf_sft.json --label_a proposed \
+    --dump_b outputs/eval1k_control_sft.json --label_b control
 """
 
 import argparse
@@ -86,10 +92,7 @@ def _index_by_key(records: list[dict]) -> dict:
 def align_dumps(
     dump_a: list[dict], dump_b: list[dict]
 ) -> tuple[list[dict], list[dict]]:
-    """Return both dumps cut to their shared keys, in a matching order.
-
-    Order follows dump_a so the two lists line up positionally.
-    """
+    """Return both dumps cut to shared keys, in dump_a order."""
     keyed_a = _index_by_key(dump_a)
     keyed_b = _index_by_key(dump_b)
     shared = [key for key in keyed_a if key in keyed_b]
@@ -102,7 +105,12 @@ def align_dumps(
 def to_columns(records: list[dict]) -> dict:
     """Return the metric columns as float arrays.
 
-    mrc aliases valid_search_calls and ttc sums the token fields.
+    Args:
+        records: Per-sample records from one val_only dump.
+
+    Returns:
+        One array per metric, where mrc aliases valid_search_calls and
+        ttc sums the generated and retrieved token fields.
     """
     return {
         "em": np.array([float(r["em"]) for r in records]),
@@ -131,8 +139,13 @@ def mean_of(field: str) -> Metric:
 def ces_of(columns: dict) -> float:
     """Return CES over a column set, as a ratio of the two means.
 
-    Averaging per-question CES would weight cheap rollouts far too
-    heavily, so this matches how _validate reports it.
+    Args:
+        columns: Metric arrays from to_columns.
+
+    Returns:
+        mean_f1 * 1000 / mean_ttc. Averaging per-question CES would
+        weight inexpensive rollouts far too heavily, so this matches
+        how _validate reports it.
     """
     return cost_efficiency_score(
         float(columns["f1"].mean()), float(columns["ttc"].mean())
@@ -149,8 +162,21 @@ def paired_bootstrap_ci(
 ) -> BootstrapResult:
     """Return the a-minus-b difference with a paired bootstrap CI.
 
-    One index draw is applied to both conditions per resample, which
-    is what makes the test paired.
+    Args:
+        records_a: Records for the first condition.
+        records_b: Records for the second, aligned to records_a.
+        metric: Reducer mapping a column set to one scalar.
+        n_resamples: Bootstrap resample count.
+        seed: Seed for the resampling generator.
+        alpha: Two-sided significance level for the interval.
+
+    Returns:
+        The observed difference and its CI bounds. One index draw is
+        applied to both conditions per resample, which is what makes
+        the test paired.
+
+    Raises:
+        ValueError: Inputs of unequal length, or no records at all.
     """
     if len(records_a) != len(records_b):
         raise ValueError(
@@ -183,8 +209,18 @@ def mcnemar(
 ) -> McNemarResult:
     """Return McNemar's exact test on a binary field.
 
-    Agreements carry no information about which side is better, so
-    only the discordant pairs enter the binomial.
+    Args:
+        records_a: Records for the first condition.
+        records_b: Records for the second, aligned to records_a.
+        field: Binary field to test, 1 counting as a win.
+
+    Returns:
+        The discordant-pair counts and the exact p-value. Agreements
+        carry no information about which side is better, so only the
+        discordant pairs enter the binomial.
+
+    Raises:
+        ValueError: Inputs of unequal length.
     """
     if len(records_a) != len(records_b):
         raise ValueError(
@@ -214,7 +250,17 @@ def mcnemar(
 
 
 def load_dump(path: str) -> list[dict]:
-    """Return the per-sample records of a val_only dump."""
+    """Return the per-sample records of a val_only dump.
+
+    Args:
+        path: Path to the dump written by trainer.dump_val_text.
+
+    Returns:
+        The decoded record list.
+
+    Raises:
+        ValueError: The file parses but is not a list of records.
+    """
     with open(path) as handle:
         records = json.load(handle)
     if not isinstance(records, list):
@@ -228,7 +274,17 @@ def compare(
     n_resamples: int = _N_RESAMPLES,
     seed: int = _SEED,
 ) -> dict:
-    """Return every metric CI plus McNemar for one aligned pair."""
+    """Return every metric CI plus McNemar for one aligned pair.
+
+    Args:
+        records_a: Records for the first condition.
+        records_b: Records for the second, aligned to records_a.
+        n_resamples: Bootstrap resample count.
+        seed: Seed for the resampling generator.
+
+    Returns:
+        One key per name in _METRICS, plus ces and mcnemar_em.
+    """
     results = {
         name: paired_bootstrap_ci(
             records_a, records_b, mean_of(name), n_resamples, seed

@@ -1,4 +1,13 @@
-"""Unit tests for the paired significance tests over val dumps."""
+"""Unit tests for the paired significance tests over val dumps.
+
+Covers pairing on (data_source, index), metric column extraction,
+the paired bootstrap CI, and McNemar's exact test on discordant
+pairs.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_paired_significance
+"""
 
 import importlib.util
 import os

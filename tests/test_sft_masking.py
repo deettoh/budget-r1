@@ -1,4 +1,17 @@
-"""Unit tests for the SFT retrieved-span loss mask."""
+"""Unit tests for the SFT retrieved-span loss mask.
+
+Covers subsequence search, span flagging including the unclosed-open
+case, and the one-position shift that aligns the mask for next-token
+prediction.
+
+Attributes:
+    OPEN: Stand-in token ids for the <information> marker.
+    CLOSE: Stand-in token ids for the </information> marker.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_sft_masking
+"""
 
 import unittest
 

@@ -3,6 +3,15 @@
 Search-R1 never trains on retrieved tokens. Mask every
 <information>..</information> span so SFT matches the RL info_mask
 gradient rule.
+
+Typical usage example:
+
+  from search_r1.sft_masking import build_loss_mask
+  from search_r1.sft_masking import information_span_flags
+
+  keep = information_span_flags(response_ids, open_ids, close_ids)
+  mask = build_loss_mask(len(prompt_ids), len(response_ids),
+                         size, keep)
 """
 
 from typing import Sequence
@@ -29,9 +38,14 @@ def information_span_flags(
 ) -> list[int]:
     """Return per-token keep flags (1 keep, 0 mask) over token_ids.
 
-    Zeroes every <information>..</information> span inclusive of both
-    markers. An unclosed open masks through the end. open_ids and
-    close_ids are the tokenizer encodings of the two markers.
+    Args:
+        token_ids: Tokenized sequence to scan.
+        open_ids: Tokenizer encoding of the <information> marker.
+        close_ids: Tokenizer encoding of the </information> marker.
+
+    Returns:
+        One flag per token, zeroed across every span inclusive of both
+        markers. An unclosed open masks through the end.
     """
     keep = [1] * len(token_ids)
     open_ids = list(open_ids)
@@ -60,9 +74,16 @@ def build_loss_mask(
 ) -> list[int]:
     """Return the SFT loss mask aligned for next-token prediction.
 
-    Shifted back one position so mask[t] grades the token at t+1,
-    matching _compute_loss slicing. response_info_keep zeroes response
-    tokens inside <information> spans.
+    Args:
+        prompt_length: Token count of the prompt segment.
+        response_length: Token count of the response segment.
+        size: Full sequence length the mask must cover.
+        response_info_keep: Per-response-token keep flags, zeroing the
+            tokens inside <information> spans.
+
+    Returns:
+        The mask shifted back one position so mask[t] grades the token
+        at t+1, matching _compute_loss slicing.
     """
     mask = [0] * size
     start = max(prompt_length - 1, 0)

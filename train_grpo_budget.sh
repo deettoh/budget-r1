@@ -4,13 +4,16 @@
 #SBATCH --output=logs/output_%j.txt
 #SBATCH --error=logs/error_%j.txt
 
-# The proposed system, and the configuration behind the reported
+# The proposed method, and the configuration behind the reported
 # numbers. Coefficients and equations are in the README.
 #
 # Ablations are single-flag edits from here:
-#   cost_reward.enabled=false                  budget mechanism only
-#   actor_rollout_ref.actor.budget_ce_coeff=0  no declaration supervision
-#   drop lora.adapter_path                     no SFT warm start
+#   budget mechanism only
+#     cost_reward.enabled=false
+#   no declaration supervision
+#     actor_rollout_ref.actor.budget_ce_coeff=0
+#   no SFT warm start
+#     drop lora.adapter_path
 #
 # The cost-only cell needs gamma=0 delta=0 alongside
 # budget_planner.enabled=false, both couple to a declaration it never

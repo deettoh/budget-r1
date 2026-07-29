@@ -1,4 +1,14 @@
-"""Unit tests for the reward formula and <budget>k</budget> parser."""
+"""Unit tests for the reward formula and <budget>k</budget> parser.
+
+Covers declaration parsing, the gamma and delta penalties, the
+under-declaration floor, answer-metric selection, grounding recall,
+the budget mask and digit position, config validation, and the
+invariant that the scalar reward never carries the per-call cost.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_budgeting
+"""
 
 import math
 import unittest
@@ -328,13 +338,10 @@ class ValidateCostRewardConfigTest(unittest.TestCase):
                 validate_cost_reward_config(cfg)
 
 
+# absolute retrieval and token cost belong to the advantage
+# so the reward may vary only with gamma and delta
 class CostInAdvantageRewardTest(unittest.TestCase):
-    """The scalar reward carries the couplings, never the call cost.
-
-    Absolute retrieval and token cost belong to the advantage, so the
-    reward must vary only with the planning couplings: gamma (unused
-    budget) and delta (declaration floor toward gold).
-    """
+    """The scalar reward carries the couplings, never the call cost."""
 
     def test_reward_is_flat_in_calls_at_a_fixed_declaration(self):
         cfg = BudgetRewardConfig(gamma=0.0, delta=0.0)

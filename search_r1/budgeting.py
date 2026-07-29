@@ -3,6 +3,14 @@
 R = R_answer + lam*G - gamma*max(0, k-N) - delta*max(0, gold_k-k),
 where G is gold-passage grounding recall. The per-call retrieval
 cost is subtracted from the GRPO advantage in ``core_algos``.
+
+Typical usage example:
+
+  from search_r1.budgeting import BudgetRewardConfig
+  from search_r1.budgeting import compute_budget_reward
+
+  cfg = BudgetRewardConfig(gamma=0.02, delta=0.06)
+  score, parts = compute_budget_reward(1.0, 2, 3, cfg, gold_budget=2)
 """
 
 import re
@@ -25,7 +33,14 @@ def title_recall(
 ) -> float:
     """Return the fraction of gold titles matched in retrieved titles.
 
-    Matches on equality or substring either way after normalization.
+    Args:
+        retrieved_titles: Titles parsed out of the retrieved blocks.
+        gold_titles: Supporting-passage titles for the question.
+
+    Returns:
+        Recall in [0, 1], counting a gold title as matched on equality
+        or substring either way after normalization. 0 when no gold
+        titles are given.
     """
     if not gold_titles:
         return 0.0
@@ -59,8 +74,9 @@ def compute_grounding_reward(
 class BudgetRewardConfig:
     """Frozen declaration-coupling coefficients.
 
-    gamma charges budget declared and left unused, delta charges
-    declaring below the gold budget.
+    Attributes:
+        gamma: Charge on budget declared and left unused.
+        delta: Charge on declaring below the gold budget.
     """
 
     gamma: float = 0.01
@@ -68,7 +84,15 @@ class BudgetRewardConfig:
 
 
 def validate_cost_reward_config(config: Optional[dict]) -> None:
-    """Raise if the cost reward is on but charges no retrieval cost."""
+    """Check that an enabled cost reward charges a retrieval cost.
+
+    Args:
+        config: The cost_reward config block, or None when absent.
+
+    Raises:
+        ValueError: Cost reward enabled with cost_in_advantage at 0,
+            which would reward retrieval instead of charging it.
+    """
     cfg = config or {}
     if not cfg.get("enabled", False):
         return
@@ -81,10 +105,7 @@ def validate_cost_reward_config(config: Optional[dict]) -> None:
 
 
 def parse_budget_declaration(text: str, max_budget: int = 5) -> Optional[int]:
-    """Return k if ``text`` opens with a valid ``<budget>k</budget>``.
-
-    None when malformed or k outside [0, max_budget].
-    """
+    """Return in-range k from a leading <budget>k</budget> or None."""
     match = _BUDGET_PATTERN.match(text or "")
     if match is None:
         return None
@@ -102,7 +123,16 @@ def find_budget_digit_position(
 ) -> Optional[int]:
     """Return the index of the declared digit inside the budget span.
 
-    Used by the budget-CE aux loss. None when the span has no digit.
+    Used by the budget-CE aux loss.
+
+    Args:
+        response_ids: Response token ids.
+        budget_mask: 0/1 mask marking the declaration span.
+        digit_token_ids: Token ids that encode a single digit.
+
+    Returns:
+        Position of the first digit inside the span, or None when the
+        span holds no digit.
     """
     digit_set = set(digit_token_ids)
     for position, (token, masked) in enumerate(
@@ -116,10 +146,7 @@ def find_budget_digit_position(
 def build_budget_mask(
     response_ids: Sequence[int], budget_ids: Sequence[int]
 ) -> list[int]:
-    """Return a 0/1 mask over the first <budget>k</budget> span.
-
-    All zeros when the declaration is empty or absent.
-    """
+    """Return a 0/1 mask over the first budget span, else all zeros."""
     mask = [0] * len(response_ids)
     span = len(budget_ids)
     if span == 0 or span > len(response_ids):
@@ -137,7 +164,17 @@ def build_budget_mask(
 def select_answer_reward(em: float, f1: float, metric: str = "em") -> float:
     """Return the answer reward under metric em, f1, or em_f1.
 
-    em keeps parity with the Search-R1 baseline.
+    Args:
+        em: Exact-match score for the rollout.
+        f1: Token-level F1 for the rollout.
+        metric: Selector; em keeps parity with the Search-R1 baseline
+            and em_f1 averages the two.
+
+    Returns:
+        The selected answer reward.
+
+    Raises:
+        ValueError: Unknown metric name.
     """
     if metric == "em":
         return float(em)
@@ -157,16 +194,23 @@ def should_force_search(
     """Return True if an early answer must be blocked to force search.
 
     Bootstrap scaffolding, off in every reported run.
+
+    Args:
+        declared_budget: Budget k the rollout declared, negative when
+            it declared none.
+        search_count: Retrieval calls issued so far.
+        force_active: Whether the forcing window is open.
+        min_searches: Floor applied on top of the declared budget.
+
+    Returns:
+        True while the rollout is below its forced target.
     """
     target = max(declared_budget if declared_budget >= 0 else 0, min_searches)
     return force_active and target >= 1 and search_count < target
 
 
 def curriculum_gamma(base_gamma: float, force_active: bool) -> float:
-    """Return 0 while forcing is active, else ``base_gamma``.
-
-    Suppresses the unused-budget penalty only in the forcing window.
-    """
+    """Return 0 while forcing is active, else ``base_gamma``."""
     return 0.0 if force_active else base_gamma
 
 
@@ -180,8 +224,18 @@ def compute_budget_reward(
 ) -> tuple[float, dict[str, float]]:
     """Return ``(score, parts)`` for one rollout.
 
-    parts contains each component for logging. The under-declaration
-    penalty applies only when gold_budget is given.
+    Args:
+        answer_score: Answer reward under the configured metric.
+        valid_search_calls: Retrieval calls the rollout actually made.
+        declared_budget: Budget k the rollout declared.
+        config: Frozen gamma/delta coupling coefficients.
+        gold_budget: Reference budget; the under-declaration penalty
+            applies only when this is given.
+        grounding_reward: Gold-passage recall term, already scaled.
+
+    Returns:
+        The scalar reward and a dict breaking out each component for
+        logging.
     """
     unused_budget_penalty = config.gamma * max(
         0, declared_budget - valid_search_calls

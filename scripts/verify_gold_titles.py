@@ -1,12 +1,18 @@
 """Print whether a built RL parquet carries ``extra_info.gold_titles``.
 
 Sanity check before a grounding run, which needs gold titles present.
+
+Typical usage example:
+
+  python3 scripts/verify_gold_titles.py \
+    --parquet data/thesis_rl_budget/train.parquet
 """
 
 import argparse
 
 
 def main() -> None:
+    """Print the row count and the first row's extra_info keys."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--parquet", required=True)
     args = parser.parse_args()

@@ -4,6 +4,10 @@ Rebuilds e5_Flat.index from its split parts by renaming part_aa then
 appending part_ab, so peak extra disk stays under the ~33gb quota a
 plain cat would blow. Gunzips the corpus after. Idempotent and
 resumable from a partial append.
+
+Typical usage example:
+
+  python3 scripts/assemble_retrieval.py --data_dir retrieval_data
 """
 
 import argparse
@@ -27,11 +31,17 @@ _CORPUS_OUT = "wiki-18.jsonl"
 def _assemble_index_inplace(data_dir: str) -> None:
     """Build e5_Flat.index from the parts without 65 GB headroom.
 
-    Renames part_aa onto the final index path (metadata-only, no
-    copy), then streams part_ab in via append, then deletes
-    part_ab. Peak extra disk use is ~22 GB; net change is zero.
-    Idempotent: a full-size index short-circuits. Resumable: a
+    Renaming part_aa onto the index path costs no copy, so only
+    part_ab is streamed in. A full-size index short-circuits and a
     partial append is detected and re-done.
+
+    Args:
+        data_dir: Directory holding the index parts and the output.
+
+    Raises:
+        FileNotFoundError: A required part is absent.
+        OSError: A part or the assembled index is the wrong size,
+            refusing to clobber a file it cannot account for.
     """
     out = os.path.join(data_dir, _INDEX_OUT)
     pa = os.path.join(data_dir, _PART_AA)

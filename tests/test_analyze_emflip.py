@@ -1,4 +1,12 @@
-"""Unit tests for the EM-flip diagnostic aggregation."""
+"""Unit tests for the EM-flip diagnostic aggregation.
+
+Covers splitting records by retrieval-call count and the win, loss
+and tie counts between two conditions.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_analyze_emflip
+"""
 
 import importlib.util
 import os

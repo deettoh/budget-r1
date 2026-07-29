@@ -1,4 +1,13 @@
-"""Unit tests for the torch-free LoRA resume helpers."""
+"""Unit tests for the torch-free LoRA resume helpers.
+
+Covers FSDP prefix stripping, adapter-path resolution including the
+fail-fast on a configured but incomplete directory, and adapter-name
+reinsertion into lora keys.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_lora_utils
+"""
 
 import os
 import tempfile

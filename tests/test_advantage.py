@@ -1,7 +1,12 @@
 """Tests for group-normalized cost in the GRPO advantage (option a).
 
-Requires torch, so run on the HPC base env:
-    srun python -m unittest tests.test_advantage
+Covers the group z-score and the subtraction of normalized cost from
+the advantage. Requires torch, so it runs on the HPC base env rather
+than the CPU-only dev box.
+
+Typical usage example:
+
+  srun python -m unittest tests.test_advantage
 """
 
 import unittest

@@ -1,4 +1,13 @@
-"""Unit tests for gold-title extraction and recall-probe helpers."""
+"""Unit tests for gold-title extraction and recall-probe helpers.
+
+Covers title and passage extraction across the supported field
+layouts, the recall@k sweep, and the oracle-query helpers behind the
+tier-A probe.
+
+Typical usage example:
+
+  python3 -m unittest tests.test_gold_recall
+"""
 
 import unittest
 

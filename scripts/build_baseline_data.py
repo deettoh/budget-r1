@@ -3,6 +3,12 @@
 Extracts the raw question from each agentic prompt and rebuilds it as
 closed-book or single retrieve-then-read. Wording mirrors the Search-R1
 template so the retrieval regime is the only change vs the frozen bar.
+
+Typical usage example:
+
+  python3 scripts/build_baseline_data.py --mode naiverag \
+    --src data/thesis_rl/test.parquet \
+    --out data/baseline_naiverag/test.parquet
 """
 
 import argparse
